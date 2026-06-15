@@ -23,9 +23,11 @@ def bill_totals(res) -> dict:
     subtotal = sum(price for _, _, price in lines)
     discount_pct = res["discount"] or 0.0
     discount_amount = round(subtotal * discount_pct / 100, 2)
-    total = round((subtotal - discount_amount) * (1 + constants.VAT_RATE), 2)
+    net = round(subtotal - discount_amount, 2)
+    vat = round(net * constants.VAT_RATE, 2)
     return {"subtotal": subtotal, "discount_pct": discount_pct,
-            "discount_amount": discount_amount, "total": total}
+            "discount_amount": discount_amount,
+            "net": net, "vat": vat, "total": round(net + vat, 2)}
 
 
 def bill_text(res, guest_name: str) -> str:

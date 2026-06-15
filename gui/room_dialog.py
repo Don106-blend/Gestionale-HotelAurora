@@ -20,6 +20,14 @@ class RoomDialog(tk.Toplevel):
         self.transient(master)
         self._build()
 
+    def show(self, room_number: int):
+        """Riusa la stessa finestra puntandola a un'altra camera."""
+        self.room_number = room_number
+        self.title(f"Camera {room_number}")
+        self._build()
+        self.deiconify()
+        self.lift()
+
     def _build(self):
         for child in self.winfo_children():
             child.destroy()

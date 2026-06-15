@@ -33,6 +33,11 @@ Al primo avvio viene creato `hotel.db` con le 81 camere
   superare la capienza genera un avviso ma non blocca.
 - **Fogli** (pulizie, colazione, pranzo, cena): generati per qualsiasi data
   e salvabili come file di testo.
+- **Budget**: saldo dell'hotel come registro di movimenti (introiti/perdite).
+  Al check-out il netto del conto entra come introito "Soggiorno" e l'IVA
+  come perdita "IVA". Saldo = introiti - perdite. Lo stesso registro accogliera
+  in futuro bollette, stipendi, ecc. (una nuova categoria, nessuna modifica
+  allo schema).
 - **Debug** (pulsante in alto a destra): genera in blocco prenotazioni di
   prova per popolare velocemente il programma. Si imposta il numero di
   prenotazioni, l'intervallo di date dei check-in, le notti minime e massime

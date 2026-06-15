@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from . import constants, guests, rooms
+from . import billing, budget, constants, guests, rooms
 from .database import get_conn
 
 ACTIVE_STATUSES = ("booked", "checked_in")
@@ -138,9 +138,9 @@ def upcoming_for_room(room_number: int, today: date):
 
 
 def in_range(start: date, end: date):
-    """Prenotazioni che intersecano [start, end] (per la timeline)."""
+    """Prenotazioni attive che intersecano [start, end] (per la timeline)."""
     return get_conn().execute(
-        "SELECT * FROM reservations WHERE status != 'cancelled'"
+        "SELECT * FROM reservations WHERE status IN ('booked', 'checked_in')"
         " AND checkin_date <= ? AND checkout_date >= ?"
         " ORDER BY room_number, checkin_date",
         (end.isoformat(), start.isoformat())).fetchall()
@@ -201,6 +201,13 @@ def do_checkout(res_id: int) -> None:
                  (res_id,))
     conn.commit()
     rooms.set_dirty(res["room_number"], True)
+
+    # il conto alimenta il bilancio: netto come introito, IVA come perdita
+    t = billing.bill_totals(res)
+    note = f"Camera {res['room_number']} - {guest_display_name(res)}"
+    budget.record(budget.INCOME, "Soggiorno", t["net"], note)
+    if t["vat"]:
+        budget.record(budget.LOSS, "IVA", t["vat"], note)
 
 
 def guest_display_name(res) -> str:

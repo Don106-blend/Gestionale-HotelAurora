@@ -56,6 +56,15 @@ CREATE TABLE IF NOT EXISTS reservation_guests (
     guest_id        INTEGER NOT NULL REFERENCES guests(id),
     is_child        INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS ledger (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    day         TEXT NOT NULL,
+    kind        TEXT NOT NULL,        -- 'income' | 'loss'
+    category    TEXT NOT NULL,        -- 'Soggiorno', 'IVA', futuro: 'Bolletta'...
+    amount      REAL NOT NULL,
+    note        TEXT NOT NULL DEFAULT ''
+);
 """
 
 _conn = None

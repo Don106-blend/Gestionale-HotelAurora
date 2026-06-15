@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import timedelta
 from tkinter import messagebox, ttk
 
-from hotel import clock, constants, debug_seed
+from hotel import budget, clock, constants, debug_seed
 
 from .utils import format_date_it, parse_date_it
 
@@ -86,6 +86,26 @@ class DebugToolWindow(tk.Toplevel):
                                     " attivi oggi",
                         variable=self.auto_checkin).grid(
             row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+
+        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
+                                  sticky="ew", pady=8)
+        row += 1
+        ttk.Label(frame, text="Aggiungi movimento al budget:").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        ttk.Label(frame, text="Tipo").grid(row=row, column=0, sticky="w", pady=2)
+        self.budget_kind = ttk.Combobox(frame, width=10, state="readonly",
+                                        values=("Introito", "Perdita"))
+        self.budget_kind.set("Introito")
+        self.budget_kind.grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+        add_field("Categoria", "b_category", "Bolletta", width=16)
+        add_field("Importo", "b_amount", "0", width=10)
+        add_field("Nota", "b_note", "", width=22)
+        ttk.Button(frame, text="Aggiungi a budget",
+                   command=self._add_budget).grid(
+            row=row, column=0, columnspan=2, pady=(2, 0))
         row += 1
 
         buttons = ttk.Frame(frame)
@@ -173,6 +193,24 @@ class DebugToolWindow(tk.Toplevel):
             msg += (f"\n{result.failed} non posizionate:"
                     f" nessuna camera libera nel periodo.")
         messagebox.showinfo("Debug", msg, parent=self)
+
+    def _add_budget(self):
+        try:
+            amount = float(self.vars["b_amount"].get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Errore", "Importo non valido.", parent=self)
+            return
+        category = self.vars["b_category"].get().strip()
+        if not category:
+            messagebox.showerror("Errore", "Inserire una categoria.",
+                                 parent=self)
+            return
+        kind = (budget.INCOME if self.budget_kind.get() == "Introito"
+                else budget.LOSS)
+        budget.record(kind, category, amount, self.vars["b_note"].get().strip())
+        self.on_done()
+        messagebox.showinfo("Debug", "Movimento aggiunto al budget.",
+                            parent=self)
 
     def _clear(self):
         if not messagebox.askyesno(

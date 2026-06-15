@@ -16,7 +16,6 @@ HEADER_H = 28
 STATUS_COLORS = {
     "booked": constants.COLOR_BOOKED_BAR,
     "checked_in": constants.COLOR_OCCUPIED,
-    "checked_out": "#cccccc",
 }
 
 

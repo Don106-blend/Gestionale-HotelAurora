@@ -61,8 +61,7 @@ def _make_guests(first: str, last: str, adults: int, children: int,
         people.append(_guest(first if i == 0 else names.random_first_name(rng),
                              last, False, rng))
     for _ in range(children):
-        people.append(_guest(names.random_first_name(rng, child=True),
-                             last, True, rng))
+        people.append(_guest(names.random_first_name(rng), last, True, rng))
     return people
 
 
@@ -150,5 +149,6 @@ def clear_all() -> None:
     conn.execute("DELETE FROM reservation_guests")
     conn.execute("DELETE FROM reservations")
     conn.execute("DELETE FROM guests")
+    conn.execute("DELETE FROM ledger")
     conn.execute("UPDATE rooms SET dirty = 0, blocked = 0")
     conn.commit()

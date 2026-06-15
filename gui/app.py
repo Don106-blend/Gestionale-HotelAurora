@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .booking_form import BookingForm
+from .budget_view import BudgetWindow
 from .debug_tool import DebugToolWindow
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
@@ -16,6 +17,7 @@ class HotelApp(tk.Tk):
         super().__init__()
         self.title("HotelAurora")
         self.geometry("1120x760")
+        self.room_dialog = None  # finestra camera unica e riutilizzata
         self._build()
 
     def _build(self):
@@ -33,6 +35,8 @@ class HotelApp(tk.Tk):
                    command=self.refresh).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Debug",
                    command=self._open_debug).pack(side="right", padx=2)
+        ttk.Button(toolbar, text="Budget",
+                   command=lambda: BudgetWindow(self)).pack(side="right", padx=2)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -57,7 +61,11 @@ class HotelApp(tk.Tk):
         BookingForm(self, on_done=self.refresh)
 
     def _open_room(self, room_number: int):
-        RoomDialog(self, room_number, on_change=self.refresh)
+        if self.room_dialog is not None and self.room_dialog.winfo_exists():
+            self.room_dialog.show(room_number)
+        else:
+            self.room_dialog = RoomDialog(self, room_number,
+                                          on_change=self.refresh)
 
     def _open_debug(self):
         DebugToolWindow(self, on_done=self.refresh)

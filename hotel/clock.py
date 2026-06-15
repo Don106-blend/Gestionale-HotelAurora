@@ -19,7 +19,3 @@ def set_today(day: date | None) -> None:
     """Imposta la data simulata; con None ripristina la data reale."""
     global _override
     _override = day
-
-
-def is_overridden() -> bool:
-    return _override is not None

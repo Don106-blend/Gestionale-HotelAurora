@@ -16,8 +16,8 @@ database.DB_PATH = Path(tempfile.gettempdir()) / "hotel_aurora_smoke.db"
 if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
-from hotel import (billing, cleaning, clock, constants, debug_seed, guests,
-                   meals, reservations, rooms)
+from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
+                   guests, meals, reservations, rooms)
 
 failures = []
 
@@ -202,6 +202,14 @@ check("dopo il check-out la camera e libera",
 check("dopo il check-out resta sporca", rooms.get_room(101)["dirty"] == 1)
 check("camera partita resta nel foglio pulizie del giorno di check-out",
       101 in {t.room_number for t in cleaning.tasks_for_day(d(3))})
+check("prenotazione checked_out sparisce dalla timeline",
+      res_id not in {r["id"] for r in reservations.in_range(today, d(5))})
+
+# il check-out alimenta il budget: 3 notti x 85 = 255 netto, IVA 56.10
+bt = budget.totals()
+check("budget: introito netto al check-out", bt["income"] == 255.0)
+check("budget: perdita IVA al check-out", bt["loss"] == 56.10)
+check("budget: saldo = introiti - perdite", bt["balance"] == 198.90)
 
 # bilanciamento operatori: 30 camere in check-out = 15h -> 2 operatori
 for i in range(5, 27):
@@ -281,11 +289,9 @@ check("arrival_on None su un'altra camera",
       reservations.arrival_on(102, d(2)) is None)
 
 clock.set_today(d(10))
-check("clock override attivo",
-      clock.today() == d(10) and clock.is_overridden())
+check("clock override attivo", clock.today() == d(10))
 clock.set_today(None)
-check("clock reset alla data reale",
-      clock.today() == date.today() and not clock.is_overridden())
+check("clock reset alla data reale", clock.today() == date.today())
 
 print()
 if failures:

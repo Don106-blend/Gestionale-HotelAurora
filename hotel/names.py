@@ -31,10 +31,9 @@ CITIES = (
 )
 
 
-def random_first_name(rng: random.Random, child: bool = False) -> str:
-    """Nome casuale; pesca dai due generi in modo uniforme."""
-    pool = MALE_NAMES + FEMALE_NAMES
-    return rng.choice(pool)
+def random_first_name(rng: random.Random) -> str:
+    """Nome casuale, pescato indifferentemente tra maschili e femminili."""
+    return rng.choice(MALE_NAMES + FEMALE_NAMES)
 
 
 def random_last_name(rng: random.Random) -> str:
