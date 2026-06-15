@@ -1,0 +1,1 @@
+"""HotelAurora: interfaccia grafica tkinter."""
