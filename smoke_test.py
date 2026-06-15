@@ -17,7 +17,7 @@ if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
 from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
-                   guests, meals, reservations, rooms)
+                   guests, mail, meals, reservations, rooms)
 
 failures = []
 
@@ -292,6 +292,37 @@ clock.set_today(d(10))
 check("clock override attivo", clock.today() == d(10))
 clock.set_today(None)
 check("clock reset alla data reale", clock.today() == date.today())
+
+# --- gameplay email ----------------------------------------------------------
+debug_seed.clear_all()
+mail.rng.seed(7)
+mail.config.auto_insert = False
+mid = mail.spawn()
+m = mail.get(mid)
+check("email mittente nome.cognome@email.com",
+      m["sender"].endswith("@email.com") and "." in m["sender"].split("@")[0])
+check("email body riempito dal template", len(m["body"]) > 40)
+check("email non ancora inserita", m["inserted"] == 0)
+
+room = mail.insert(mid)
+check("insert email crea prenotazione in una camera valida",
+      rooms.get_room(room) is not None)
+check("email segnata come inserita", mail.get(mid)["inserted"] == 1)
+res_room = reservations.current_for_room(room, date.fromisoformat(m["checkin"]))
+booked = reservations.arrival_on(room, date.fromisoformat(m["checkin"]))
+check("prenotazione creata coi nomi della mail",
+      booked is not None and booked["last_name"] == m["last_name"])
+
+try:
+    mail.insert(mid)
+    check("doppio insert email bloccato", False)
+except reservations.ValidationError:
+    check("doppio insert email bloccato", True)
+
+mail.config.auto_insert = True
+mid2 = mail.spawn()
+check("auto-insert: email inserita allo spawn", mail.get(mid2)["inserted"] == 1)
+mail.config.auto_insert = False
 
 print()
 if failures:

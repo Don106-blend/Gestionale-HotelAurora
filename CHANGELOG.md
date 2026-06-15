@@ -1,8 +1,3 @@
-# Changelog
-
-Confronto con la versione su GitHub
-([Don106-blend/Gestionale-HotelAurora](https://github.com/Don106-blend/Gestionale-HotelAurora)).
-
 ## 2026-06-15
 
 ### Aggiunto

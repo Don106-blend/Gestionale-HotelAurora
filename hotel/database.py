@@ -65,6 +65,22 @@ CREATE TABLE IF NOT EXISTS ledger (
     amount      REAL NOT NULL,
     note        TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS mails (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    received_at TEXT NOT NULL,
+    sender      TEXT NOT NULL,
+    subject     TEXT NOT NULL,
+    body        TEXT NOT NULL,
+    first_name  TEXT NOT NULL,
+    last_name   TEXT NOT NULL,
+    checkin     TEXT NOT NULL,
+    checkout    TEXT NOT NULL,
+    adults      INTEGER NOT NULL,
+    children    INTEGER NOT NULL,
+    board       TEXT NOT NULL,
+    inserted    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 _conn = None

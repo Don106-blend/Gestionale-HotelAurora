@@ -150,5 +150,6 @@ def clear_all() -> None:
     conn.execute("DELETE FROM reservations")
     conn.execute("DELETE FROM guests")
     conn.execute("DELETE FROM ledger")
+    conn.execute("DELETE FROM mails")
     conn.execute("UPDATE rooms SET dirty = 0, blocked = 0")
     conn.commit()

@@ -1,11 +1,15 @@
 """Finestra principale di HotelAurora."""
 
+import random
 import tkinter as tk
 from tkinter import ttk
+
+from hotel import mail
 
 from .booking_form import BookingForm
 from .budget_view import BudgetWindow
 from .debug_tool import DebugToolWindow
+from .mail_view import MailInbox, MailView
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
 from .room_grid import RoomGrid
@@ -19,6 +23,7 @@ class HotelApp(tk.Tk):
         self.geometry("1120x760")
         self.room_dialog = None  # finestra camera unica e riutilizzata
         self._build()
+        self.after(1000, self._mail_tick)
 
     def _build(self):
         toolbar = ttk.Frame(self, padding=6)
@@ -37,6 +42,9 @@ class HotelApp(tk.Tk):
                    command=self._open_debug).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Budget",
                    command=lambda: BudgetWindow(self)).pack(side="right", padx=2)
+        ttk.Button(toolbar, text="Mail",
+                   command=lambda: MailInbox(self, on_change=self.refresh)
+                   ).pack(side="right", padx=2)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -69,3 +77,15 @@ class HotelApp(tk.Tk):
 
     def _open_debug(self):
         DebugToolWindow(self, on_done=self.refresh)
+
+    def spawn_mail(self):
+        """Crea una nuova email e la apre come scheda separata."""
+        mail_id = mail.spawn()
+        self.refresh()
+        MailView(self, mail_id, on_change=self.refresh)
+
+    def _mail_tick(self):
+        cfg = mail.config
+        if cfg.enabled and random.random() < cfg.probability:
+            self.spawn_mail()
+        self.after(max(cfg.interval_seconds, 1) * 1000, self._mail_tick)

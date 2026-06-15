@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import timedelta
 from tkinter import messagebox, ttk
 
-from hotel import budget, clock, constants, debug_seed
+from hotel import budget, clock, constants, debug_seed, mail
 
 from .utils import format_date_it, parse_date_it
 
@@ -108,6 +108,34 @@ class DebugToolWindow(tk.Toplevel):
             row=row, column=0, columnspan=2, pady=(2, 0))
         row += 1
 
+        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
+                                  sticky="ew", pady=8)
+        row += 1
+        ttk.Label(frame, text="Gameplay - Email:").grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self.mail_enabled = tk.BooleanVar(value=mail.config.enabled)
+        ttk.Checkbutton(frame, text="Attiva arrivo email",
+                        variable=self.mail_enabled).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        self.mail_auto = tk.BooleanVar(value=mail.config.auto_insert)
+        ttk.Checkbutton(frame, text="Inserimento automatico",
+                        variable=self.mail_auto).grid(
+            row=row, column=0, columnspan=2, sticky="w")
+        row += 1
+        add_field("Intervallo (secondi)", "mail_interval",
+                  mail.config.interval_seconds, width=8)
+        add_field("Probabilita (0-1)", "mail_prob",
+                  mail.config.probability, width=8)
+        mail_buttons = ttk.Frame(frame)
+        mail_buttons.grid(row=row, column=0, columnspan=2, sticky="w")
+        ttk.Button(mail_buttons, text="Applica",
+                   command=self._apply_mail).pack(side="left", padx=(0, 4))
+        ttk.Button(mail_buttons, text="Crea email ora",
+                   command=self.master.spawn_mail).pack(side="left")
+        row += 1
+
         buttons = ttk.Frame(frame)
         buttons.grid(row=row, column=0, columnspan=2, pady=(12, 0))
         ttk.Button(buttons, text="Genera",
@@ -193,6 +221,21 @@ class DebugToolWindow(tk.Toplevel):
             msg += (f"\n{result.failed} non posizionate:"
                     f" nessuna camera libera nel periodo.")
         messagebox.showinfo("Debug", msg, parent=self)
+
+    def _apply_mail(self):
+        try:
+            interval = int(self.vars["mail_interval"].get())
+            prob = float(self.vars["mail_prob"].get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Errore", "Intervallo/probabilita non validi.",
+                                 parent=self)
+            return
+        mail.config.enabled = self.mail_enabled.get()
+        mail.config.auto_insert = self.mail_auto.get()
+        mail.config.interval_seconds = max(interval, 1)
+        mail.config.probability = min(max(prob, 0.0), 1.0)
+        messagebox.showinfo("Debug", "Impostazioni email applicate.",
+                            parent=self)
 
     def _add_budget(self):
         try:
