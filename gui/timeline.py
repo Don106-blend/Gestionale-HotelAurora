@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import date, timedelta
 from tkinter import ttk
 
-from hotel import constants, reservations, rooms
+from hotel import clock, constants, reservations, rooms
 
 DAYS_BEFORE = 3
 DAYS_AFTER = 27
@@ -41,7 +41,7 @@ class Timeline(ttk.Frame):
 
     def refresh(self):
         self.canvas.delete("all")
-        today = date.today()
+        today = clock.today()
         start = today - timedelta(days=DAYS_BEFORE)
         end = today + timedelta(days=DAYS_AFTER)
         n_days = (end - start).days + 1

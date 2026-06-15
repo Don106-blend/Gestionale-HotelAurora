@@ -1,10 +1,10 @@
 """Form di inserimento prenotazione."""
 
 import tkinter as tk
-from datetime import date, timedelta
+from datetime import timedelta
 from tkinter import colorchooser, messagebox, ttk
 
-from hotel import constants, reservations
+from hotel import clock, constants, reservations
 
 from .utils import format_date_it, parse_date_it
 
@@ -40,7 +40,7 @@ class BookingForm(tk.Toplevel):
         add_entry("Telefono", "phone", 2)
         add_entry("Email", "email", 3)
 
-        today = date.today()
+        today = clock.today()
         checkin_entry = add_entry("Check-in (gg/mm/aaaa)", "checkin", 4,
                                   format_date_it(today), width=12)
         nights_entry = add_entry("Notti", "nights", 5, "1", width=6)

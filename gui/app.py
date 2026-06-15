@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from .booking_form import BookingForm
+from .debug_tool import DebugToolWindow
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
 from .room_grid import RoomGrid
@@ -30,6 +31,8 @@ class HotelApp(tk.Tk):
                        ).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Aggiorna",
                    command=self.refresh).pack(side="right", padx=2)
+        ttk.Button(toolbar, text="Debug",
+                   command=self._open_debug).pack(side="right", padx=2)
 
         notebook = ttk.Notebook(self)
         notebook.pack(fill="both", expand=True)
@@ -38,10 +41,12 @@ class HotelApp(tk.Tk):
         notebook.add(self.grid_page, text="Camere")
         notebook.add(self.timeline_page, text="Timeline")
 
-        legend = ttk.Label(self, padding=4, text=(
-            "Legenda: bianco = libera | verde/colore custom = occupata |"
-            " giallo = check-out oggi | linea grigia = sporca |"
-            " linea rossa = bloccata | S = suite"))
+        legend = ttk.Label(self, padding=4, justify="left", text=(
+            "Legenda:  bianco = libera  |  verde/colore custom = occupata  |"
+            "  striscia gialla a destra = check-out oggi  |"
+            "  quadrato fucsia (alto dx) = arrivo oggi  |"
+            "  quadrato blu (basso dx) = arrivo domani\n"
+            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite"))
         legend.pack(fill="x")
 
     def refresh(self):
@@ -53,3 +58,6 @@ class HotelApp(tk.Tk):
 
     def _open_room(self, room_number: int):
         RoomDialog(self, room_number, on_change=self.refresh)
+
+    def _open_debug(self):
+        DebugToolWindow(self, on_done=self.refresh)

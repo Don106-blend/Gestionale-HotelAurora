@@ -1,8 +1,10 @@
 """Test di verifica della logica di HotelAurora (usa un DB temporaneo)."""
 
 import os
+import random
 import sys
 import tempfile
+from collections import defaultdict
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -14,7 +16,8 @@ database.DB_PATH = Path(tempfile.gettempdir()) / "hotel_aurora_smoke.db"
 if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
-from hotel import billing, cleaning, constants, guests, meals, reservations, rooms
+from hotel import (billing, cleaning, clock, constants, debug_seed, guests,
+                   meals, reservations, rooms)
 
 failures = []
 
@@ -212,6 +215,77 @@ loads = [sum(t.hours for t in op) for op in ops]
 check("nessun operatore oltre 8h", all(load <= 8 for load in loads))
 check("carichi bilanciati (scarto max 1h)",
       max(loads) - min(loads) <= 1.0)
+
+# --- tool di debug (seeding) -------------------------------------------------
+debug_seed.clear_all()
+check("clear_all azzera le prenotazioni",
+      len(reservations.in_range(today, d(90))) == 0)
+check("clear_all azzera lo stato camere", rooms.get_room(101)["dirty"] == 0)
+
+cfg = debug_seed.SeedConfig(
+    count=40, start=today, end=d(20), min_nights=2, max_nights=5,
+    board_prices=dict(debug_seed.DEFAULT_BOARD_PRICES),
+    random_colors=True, auto_checkin=True)
+seed_res = debug_seed.seed_reservations(cfg, rng=random.Random(42))
+check("seeding crea prenotazioni", seed_res.created > 0)
+check("seeding rispetta il count richiesto",
+      seed_res.created + seed_res.failed == 40)
+check("seeding esegue qualche check-in oggi", seed_res.checked_in > 0)
+
+seeded = reservations.in_range(today - timedelta(days=1), d(90))
+fields_ok = True
+for r in seeded:
+    ci = date.fromisoformat(r["checkin_date"])
+    co = date.fromisoformat(r["checkout_date"])
+    nights = (co - ci).days
+    if not (2 <= nights <= 5):
+        fields_ok = False
+    if not (today <= ci <= d(20)):
+        fields_ok = False
+    if not (r["first_name"] or r["last_name"]):
+        fields_ok = False
+    if not r["phone"] or not r["email"] or r["price_per_night"] <= 0:
+        fields_ok = False
+check("notti, date, nome, telefono, email, prezzo riempiti", fields_ok)
+
+price_ok = all(
+    abs(r["price_per_night"] - debug_seed.DEFAULT_BOARD_PRICES[r["board"]]) < 1e-6
+    for r in seeded)
+check("prezzo coerente con la soluzione", price_ok)
+
+by_room = defaultdict(list)
+for r in seeded:
+    by_room[r["room_number"]].append(
+        (date.fromisoformat(r["checkin_date"]),
+         date.fromisoformat(r["checkout_date"])))
+no_overlap = True
+for stays in by_room.values():
+    stays.sort()
+    for (_s1, e1), (s2, _e2) in zip(stays, stays[1:]):
+        if s2 < e1:
+            no_overlap = False
+check("nessuna sovrapposizione di camere", no_overlap)
+
+# --- indicatori dashboard (arrival_on) e orologio override -------------------
+debug_seed.clear_all()
+reservations.create_reservation(
+    first_name="Arrivo", last_name="Oggi", room_number=101,
+    checkin=d(2), checkout=d(5), adults=1, children=0,
+    price_per_night=80, board="BB", discount=None,
+    phone="", email="", color="", comments="")
+check("arrival_on trova l'arrivo nel giorno di check-in",
+      reservations.arrival_on(101, d(2)) is not None)
+check("arrival_on None nei giorni di rimanenza",
+      reservations.arrival_on(101, d(3)) is None)
+check("arrival_on None su un'altra camera",
+      reservations.arrival_on(102, d(2)) is None)
+
+clock.set_today(d(10))
+check("clock override attivo",
+      clock.today() == d(10) and clock.is_overridden())
+clock.set_today(None)
+check("clock reset alla data reale",
+      clock.today() == date.today() and not clock.is_overridden())
 
 print()
 if failures:

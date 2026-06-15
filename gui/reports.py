@@ -1,10 +1,9 @@
 """Finestra dei fogli stampabili: pulizie e pasti."""
 
 import tkinter as tk
-from datetime import date
 from tkinter import filedialog, messagebox, ttk
 
-from hotel import cleaning, meals
+from hotel import cleaning, clock, meals
 
 from .utils import format_date_it, parse_date_it
 
@@ -26,7 +25,7 @@ class ReportWindow(tk.Toplevel):
         top = ttk.Frame(frame)
         top.pack(fill="x")
         ttk.Label(top, text="Data (gg/mm/aaaa):").pack(side="left")
-        self.date_var = tk.StringVar(value=format_date_it(date.today()))
+        self.date_var = tk.StringVar(value=format_date_it(clock.today()))
         ttk.Entry(top, textvariable=self.date_var,
                   width=12).pack(side="left", padx=4)
         ttk.Button(top, text="Genera",

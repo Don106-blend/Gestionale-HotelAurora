@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import date
 from tkinter import messagebox, ttk
 
-from hotel import reservations, rooms
+from hotel import clock, reservations, rooms
 
 from .checkin_form import CheckinForm
 from .checkout_view import CheckoutView
@@ -23,7 +23,7 @@ class RoomDialog(tk.Toplevel):
     def _build(self):
         for child in self.winfo_children():
             child.destroy()
-        today = date.today()
+        today = clock.today()
         room = rooms.get_room(self.room_number)
         current = reservations.current_for_room(self.room_number, today)
         arriving = reservations.arrivable_for_room(self.room_number, today)

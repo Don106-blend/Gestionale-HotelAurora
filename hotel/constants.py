@@ -43,7 +43,9 @@ DOCUMENT_TYPES = ("Carta d'identita", "Passaporto", "Patente", "Altro")
 # Colori interfaccia (sobri)
 COLOR_FREE = "#ffffff"
 COLOR_OCCUPIED = "#9fc99f"
-COLOR_CHECKOUT_DAY = "#e3d27a"
+COLOR_CHECKOUT_DAY = "#e3d27a"        # striscia a destra: check-out oggi
 COLOR_BOOKED_BAR = "#a8bdd4"
 COLOR_DIRTY_LINE = "#8a8a8a"
 COLOR_BLOCKED_LINE = "#b03030"
+COLOR_ARRIVAL_TODAY = "#cc2e88"       # quadrato in alto a destra: arrivo oggi
+COLOR_ARRIVAL_NEXT = "#2d6cdf"        # quadrato in basso a destra: arrivo domani

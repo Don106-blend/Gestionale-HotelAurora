@@ -19,8 +19,12 @@ Al primo avvio viene creato `hotel.db` con le 81 camere
 ## Uso
 
 - **Camere** (pagina principale): un rettangolo per camera.
-  Bianco = libera, verde o colore custom = occupata, giallo = check-out oggi,
-  linea grigia = sporca, linea rossa = bloccata, "S" = suite.
+  Bianco = libera, verde o colore custom = occupata, linea grigia = sporca,
+  linea rossa = bloccata, "S" = suite. Indicatori sul lato destro della
+  cella: striscia gialla = camera occupata in check-out oggi; quadrato
+  fucsia in alto = arrivo (prenotazione) previsto oggi; quadrato blu in
+  basso = arrivo previsto domani. Gli indicatori possono coesistere (es.
+  check-out oggi con nuovo arrivo lo stesso giorno).
   Click su una camera per aprire la scheda con le azioni: check-in,
   conto/check-out, segna pulita/sporca, blocca/sblocca.
 - **Timeline**: barre delle prenotazioni per camera su circa un mese.
@@ -29,6 +33,16 @@ Al primo avvio viene creato `hotel.db` con le 81 camere
   superare la capienza genera un avviso ma non blocca.
 - **Fogli** (pulizie, colazione, pranzo, cena): generati per qualsiasi data
   e salvabili come file di testo.
+- **Debug** (pulsante in alto a destra): genera in blocco prenotazioni di
+  prova per popolare velocemente il programma. Si imposta il numero di
+  prenotazioni, l'intervallo di date dei check-in, le notti minime e massime
+  (durata casuale in quel range) e il prezzo per notte di ogni soluzione.
+  Ogni campo della prenotazione viene riempito (nome casuale, telefono,
+  email, sconto, commenti, colore). Opzioni: colori casuali e check-in
+  automatico dei soggiorni attivi oggi. Include anche "Svuota database" per
+  ripartire da zero e un campo "Data attuale" per simulare un giorno diverso
+  (sposta l'oggi di tutto il programma finche l'app resta aperta, utile per
+  vedere arrivi e check-out cambiare sulla dashboard).
 
 ## Struttura
 
@@ -36,6 +50,7 @@ Al primo avvio viene creato `hotel.db` con le 81 camere
 main.py            punto di ingresso
 hotel/             logica di dominio e dati (nessun riferimento alla GUI)
   constants.py     piani, capienze, soluzioni (BB/RO/HB/FB/RES), IVA, ore pulizie
+  clock.py         data odierna con override per la simulazione (debug)
   database.py      schema SQLite e popolamento camere
   rooms.py         stato camere (pulizia, blocco)
   reservations.py  prenotazioni, disponibilita, check-in/out
@@ -43,7 +58,10 @@ hotel/             logica di dominio e dati (nessun riferimento alla GUI)
   billing.py       conto con sconto e IVA 22%
   cleaning.py      foglio ore pulizie e bilanciamento operatori
   meals.py         fogli colazione/pranzo/cena
+  names.py         librerie di nomi, cognomi e citta per i dati di prova
+  debug_seed.py    generazione di prenotazioni casuali (tool di debug)
 gui/               interfaccia tkinter (una finestra per modulo)
+  debug_tool.py    finestra dello strumento di debug
 smoke_test.py      test di regressione della logica (python smoke_test.py)
 ```
 

@@ -119,6 +119,15 @@ def arrivable_for_room(room_number: int, today: date):
         (room_number, today.isoformat())).fetchone()
 
 
+def arrival_on(room_number: int, day: date):
+    """Prenotazione con check-in esattamente nel giorno indicato (un arrivo)."""
+    return get_conn().execute(
+        "SELECT * FROM reservations WHERE room_number = ?"
+        " AND status IN ('booked', 'checked_in') AND checkin_date = ?"
+        " ORDER BY id LIMIT 1",
+        (room_number, day.isoformat())).fetchone()
+
+
 def upcoming_for_room(room_number: int, today: date):
     """Prossime prenotazioni attive della camera (per la scheda camera)."""
     return get_conn().execute(
