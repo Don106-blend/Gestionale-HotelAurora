@@ -13,9 +13,15 @@ class MailView(tk.Toplevel):
         super().__init__(master)
         self.mail_id = mail_id
         self.on_change = on_change or (lambda: None)
-        self.transient(master)
+        # niente transient: deve comparire anche se il gestionale e minimizzato
         self._build()
+        self._pop_to_front()
+
+    def _pop_to_front(self):
+        self.deiconify()
         self.lift()
+        self.attributes("-topmost", True)
+        self.after(300, lambda: self.attributes("-topmost", False))
         self.focus_force()
         self.bell()
 

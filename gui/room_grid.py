@@ -51,7 +51,7 @@ class RoomGrid(ttk.Frame):
 
     def _draw_room(self, room, x, y, today, tomorrow):
         number = room["number"]
-        res = reservations.current_for_room(number, today)
+        res = reservations.current_for_room(number)
 
         fill = constants.COLOR_FREE
         label2 = ""

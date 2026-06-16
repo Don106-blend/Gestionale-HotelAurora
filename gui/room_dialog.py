@@ -6,9 +6,6 @@ from tkinter import messagebox, ttk
 
 from hotel import clock, reservations, rooms
 
-from .checkin_form import CheckinForm
-from .checkout_view import CheckoutView
-
 
 class RoomDialog(tk.Toplevel):
     def __init__(self, master, room_number: int, on_change):
@@ -33,8 +30,7 @@ class RoomDialog(tk.Toplevel):
             child.destroy()
         today = clock.today()
         room = rooms.get_room(self.room_number)
-        current = reservations.current_for_room(self.room_number, today)
-        arriving = reservations.arrivable_for_room(self.room_number, today)
+        current = reservations.current_for_room(self.room_number)
 
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
@@ -63,17 +59,10 @@ class RoomDialog(tk.Toplevel):
             ttk.Label(frame, text=label).pack(anchor="w")
 
         ttk.Separator(frame).pack(fill="x", pady=8)
+        ttk.Label(frame, text="Check-in e check-out si gestiscono"
+                              " dalla Reception.").pack(anchor="w")
         buttons = ttk.Frame(frame)
         buttons.pack(fill="x")
-
-        if arriving is not None:
-            ttk.Button(buttons, text="Check-in",
-                       command=lambda: self._checkin(arriving)
-                       ).pack(side="left", padx=2)
-        if current is not None:
-            ttk.Button(buttons, text="Conto / Check-out",
-                       command=lambda: self._checkout(current)
-                       ).pack(side="left", padx=2)
 
         clean_label = "Segna pulita" if room["dirty"] else "Segna sporca"
         ttk.Button(buttons, text=clean_label,
@@ -91,12 +80,6 @@ class RoomDialog(tk.Toplevel):
     def _refresh(self):
         self.on_change()
         self._build()
-
-    def _checkin(self, res):
-        CheckinForm(self, res, on_done=self._refresh)
-
-    def _checkout(self, res):
-        CheckoutView(self, res, on_done=self._refresh)
 
     def _toggle_clean(self, room):
         rooms.set_dirty(self.room_number, not room["dirty"])

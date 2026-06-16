@@ -2,19 +2,18 @@
 
 from datetime import date
 
-from . import billing, budget, constants, guests, rooms
+from . import billing, budget, clock, constants, guests, rooms
 from .database import get_conn
-
-ACTIVE_STATUSES = ("booked", "checked_in")
 
 
 class ValidationError(Exception):
     """Errore bloccante nei dati di una prenotazione."""
 
 
-def make_code(adults: int, children: int, checkin: date, board: str) -> str:
+def make_code(adults: int, children: int, booking_date: date, board: str) -> str:
+    # @gg/mm = giorno in cui arriva la prenotazione, non il check-in
     pax = adults + children
-    return (f"{pax}pax | @{checkin.strftime('%d/%m')} | {board}"
+    return (f"{pax}pax | @{booking_date.strftime('%d/%m')} | {board}"
             f" | {constants.PAYMENT_DEFAULT}")
 
 
@@ -82,16 +81,17 @@ def create_reservation(*, first_name: str, last_name: str, room_number: int,
             f"La camera {room_number} non e libera nel periodo scelto.")
 
     conn = get_conn()
+    booking_date = clock.today()
     cur = conn.execute(
         "INSERT INTO reservations (code, room_number, first_name, last_name,"
         " checkin_date, checkout_date, adults, children, price_per_night,"
-        " board, discount, phone, email, color, comments, payment)"
-        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (make_code(adults, children, checkin, board), room_number,
+        " board, discount, phone, email, color, comments, payment, created_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (make_code(adults, children, booking_date, board), room_number,
          first_name, last_name, checkin.isoformat(), checkout.isoformat(),
          adults, children, price_per_night, board, discount,
          phone.strip(), email.strip(), color, comments.strip(),
-         constants.PAYMENT_DEFAULT),
+         constants.PAYMENT_DEFAULT, booking_date.isoformat()),
     )
     conn.commit()
     return cur.lastrowid
@@ -102,21 +102,12 @@ def get(res_id: int):
         "SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
 
 
-def current_for_room(room_number: int, today: date):
+def current_for_room(room_number: int):
     """Prenotazione checked-in della camera, se presente."""
     return get_conn().execute(
         "SELECT * FROM reservations WHERE room_number = ?"
         " AND status = 'checked_in' ORDER BY checkin_date LIMIT 1",
         (room_number,)).fetchone()
-
-
-def arrivable_for_room(room_number: int, today: date):
-    """Prenotazione 'booked' della camera con check-in raggiunto."""
-    return get_conn().execute(
-        "SELECT * FROM reservations WHERE room_number = ?"
-        " AND status = 'booked' AND checkin_date <= ?"
-        " ORDER BY checkin_date LIMIT 1",
-        (room_number, today.isoformat())).fetchone()
 
 
 def arrival_on(room_number: int, day: date):
@@ -189,6 +180,25 @@ def do_checkin(res_id: int, guest_list: list[dict]) -> None:
                  (res_id,))
     conn.commit()
     rooms.set_dirty(res["room_number"], True)
+
+
+def checkin_guest(res_id: int, guest: dict) -> None:
+    """Registra un singolo ospite; al primo mette la prenotazione in check-in.
+
+    Usato dalla reception, dove ogni ospite arriva e si registra separatamente.
+    """
+    conn = get_conn()
+    guest_id = guests.upsert(guest)
+    conn.execute(
+        "INSERT INTO reservation_guests (reservation_id, guest_id, is_child)"
+        " VALUES (?, ?, ?)",
+        (res_id, guest_id, int(guest.get("is_child", False))))
+    res = get(res_id)
+    conn.execute("UPDATE reservations SET status = 'checked_in' WHERE id = ?"
+                 " AND status = 'booked'", (res_id,))
+    conn.commit()
+    if res["status"] == "booked":
+        rooms.set_dirty(res["room_number"], True)
 
 
 def do_checkout(res_id: int) -> None:

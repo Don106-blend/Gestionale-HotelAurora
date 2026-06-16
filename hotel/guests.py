@@ -42,10 +42,3 @@ def upsert(data: dict) -> int:
         " document_type, document_number) VALUES (?, ?, ?, ?, ?, ?)", fields)
     conn.commit()
     return cur.lastrowid
-
-
-def guests_of(res_id: int):
-    return get_conn().execute(
-        "SELECT g.*, rg.is_child FROM reservation_guests rg"
-        " JOIN guests g ON g.id = rg.guest_id"
-        " WHERE rg.reservation_id = ? ORDER BY rg.id", (res_id,)).fetchall()

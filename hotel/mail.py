@@ -6,7 +6,7 @@ aggiungerne uno = appenderlo a TEMPLATES.
 """
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from . import clock, constants, names, reservations
@@ -22,9 +22,19 @@ class MailConfig:
     interval_seconds: int = 60
     probability: float = 0.5
     auto_insert: bool = False
+    returning_probability: float = 0.5   # quota di mail da ospiti abituali
+    window_days: int = 5                 # check-in entro N giorni dal tempo simulato
+    # probabilita per turno; i turni non elencati usano `probability` (standard)
+    shift_probability: dict = field(default_factory=lambda: {
+        "Pranzo": 0.2, "Sera": 0.2, "Notte": 0.05})
 
 
 config = MailConfig()
+
+
+def shift_probability() -> float:
+    """Probabilita mail del turno corrente (standard se non specificata)."""
+    return config.shift_probability.get(clock.shift()[0], config.probability)
 
 # Template in tono naturale. Placeholder: name, email, pax, guests, nights,
 # checkin, checkout, board. Aggiungere un template = aggiungere una stringa.
@@ -51,20 +61,41 @@ def _it(iso: str) -> str:
     return date.fromisoformat(iso).strftime("%d/%m/%Y")
 
 
+def _pick_returning_guest():
+    """Un ospite abituale senza prenotazioni attive, oppure None.
+
+    Riusa il DB ospiti con probabilita config.returning_probability ed esclude
+    chi ha gia una prenotazione programmata (stesso nome): niente doppioni.
+    """
+    if rng.random() >= config.returning_probability:
+        return None
+    rows = get_conn().execute(
+        "SELECT DISTINCT first_name, last_name FROM guests g"
+        " WHERE first_name != '' AND last_name != '' AND NOT EXISTS ("
+        "  SELECT 1 FROM reservations r"
+        "  WHERE r.status IN ('booked', 'checked_in')"
+        "  AND r.first_name = g.first_name COLLATE NOCASE"
+        "  AND r.last_name = g.last_name COLLATE NOCASE)").fetchall()
+    return rng.choice(rows) if rows else None
+
+
 def _generate() -> dict:
-    first = names.random_first_name(rng)
-    last = names.random_last_name(rng)
+    guest = _pick_returning_guest()
+    if guest is not None:
+        first, last = guest["first_name"], guest["last_name"]
+    else:
+        first, last = names.random_first_name(rng), names.random_last_name(rng)
     adults = rng.randint(1, 3)
     children = rng.randint(0, 1)
     nights = rng.randint(1, 7)
-    checkin = clock.today() + timedelta(days=rng.randint(0, 14))
+    checkin = clock.today() + timedelta(days=rng.randint(0, max(config.window_days, 0)))
     checkout = checkin + timedelta(days=nights)
     guests = [f"{first} {last}"]
     for _ in range(adults - 1 + children):
         guests.append(f"{names.random_first_name(rng)} {last}")
     return {
         "first_name": first, "last_name": last,
-        "email": f"{first}.{last}@email.com".lower(),
+        "email": f"{first}.{last}".lower().replace(" ", "") + "@email.com",
         "adults": adults, "children": children, "nights": nights,
         "checkin": checkin.isoformat(), "checkout": checkout.isoformat(),
         "board": rng.choice(list(constants.BOARDS)), "guests": guests,

@@ -6,6 +6,7 @@ from tkinter import colorchooser, messagebox, ttk
 
 from hotel import clock, constants, reservations
 
+from .date_picker import choose_into
 from .utils import format_date_it, parse_date_it
 
 BOARD_CHOICES = [f"{b.code} - {b.label}" for b in constants.BOARDS.values()]
@@ -51,6 +52,14 @@ class BookingForm(tk.Toplevel):
         checkin_entry.bind("<FocusOut>", lambda _e: self._sync_from_nights())
         nights_entry.bind("<FocusOut>", lambda _e: self._sync_from_nights())
         checkout_entry.bind("<FocusOut>", lambda _e: self._sync_from_dates())
+        ttk.Button(frame, text="Cal", width=4,
+                   command=lambda: choose_into(self, self.vars["checkin"],
+                                               self._sync_from_nights)
+                   ).grid(row=4, column=2, padx=2)
+        ttk.Button(frame, text="Cal", width=4,
+                   command=lambda: choose_into(self, self.vars["checkout"],
+                                               self._sync_from_dates)
+                   ).grid(row=6, column=2, padx=2)
 
         ttk.Label(frame, text="Adulti").grid(row=7, column=0, sticky="w")
         self.vars["adults"] = tk.StringVar(value="2")

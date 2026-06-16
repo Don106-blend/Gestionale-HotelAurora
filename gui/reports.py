@@ -5,6 +5,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from hotel import cleaning, clock, meals
 
+from .date_picker import choose_into
 from .utils import format_date_it, parse_date_it
 
 
@@ -28,6 +29,9 @@ class ReportWindow(tk.Toplevel):
         self.date_var = tk.StringVar(value=format_date_it(clock.today()))
         ttk.Entry(top, textvariable=self.date_var,
                   width=12).pack(side="left", padx=4)
+        ttk.Button(top, text="Cal", width=4,
+                   command=lambda: choose_into(self, self.date_var)
+                   ).pack(side="left", padx=(0, 4))
         ttk.Button(top, text="Genera",
                    command=self._generate).pack(side="left")
         ttk.Button(top, text="Salva su file",

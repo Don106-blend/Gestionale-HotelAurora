@@ -1,3 +1,42 @@
+## 2026-06-16
+
+### Aggiunto
+
+- **Controllo velocita (chiude la fase 1 di gameplay)** — bottoni in basso a
+  destra: Pausa, Play, T (tempo reale), 1x, 2x, 5x. Sono un moltiplicatore
+  live (`clock.speed`/`realtime`/`paused`) SOPRA le basi del debug (scale 24,
+  mail prob 0.5): non le modificano, niente feedback loop. Tutte le frequenze
+  (avanzamento tempo, mail, reception) leggono `clock.freq_factor()`.
+
+- **Reception (check-in/check-out come gameplay)** — `hotel/reception.py` +
+  tabella `reception` + finestra `gui/reception_view.py`, pulsante "Reception".
+  - Gli ospiti compaiono in reception a orari casuali (sul time tick, come le
+    mail): arrivi fuori dai turni Mattina/Pranzo, partenze solo di Mattina.
+  - Prenotazione con piu persone: una riga per ospite, tutte insieme; check-in
+    per-persona (la prima occupa la camera). Orario in rosso se attende > 1h.
+  - Check-out: una riga per prenotazione, apre il conto e lo applica.
+  - Avviso lampeggiante giallo/bianco in alto a sinistra quando c'e coda;
+    clic apre la Reception; nascosto se la Reception e gia aperta.
+  - Il check-in/out via clic sulla camera e stato rimosso (RoomDialog);
+    `gui/checkin_form.py` eliminato (inserimento ora automatico).
+
+- **Persistenza stato di gioco** — `hotel/persistence.py` + tabella KV
+  `settings`. Alla chiusura della finestra (`WM_DELETE_WINDOW`) salva
+  orologio simulato (data/ora, scala, on/off) e config email; all'avvio li
+  ripristina. Niente piu reset al riavvio.
+
+- **Tempo simulato (gameplay)** — `hotel/clock.py` ora gestisce un datetime
+  che avanza in scala (`scale` ore di gioco per 1h reale, default 24). `tick()`
+  avanza in base al tempo reale trascorso; `today()`/`now()` seguono il tempo
+  di gioco, quindi i giorni progrediscono e la dashboard si aggiorna da sola.
+  - Barra in basso nella dashboard con data/ora e turno color-coded
+    (Mattina/Pranzo/Pomeriggio/Sera/Notte); clic = finestra "Orario"
+    (`gui/time_view.py`) con orologio, data, ora e turno che si aggiornano.
+  - Toggle on/off e scala personalizzabile dalla scheda Debug.
+  - Il timer delle email resta su tempo reale, invariato.
+- **Debug a sezioni collassabili** — le sezioni della scheda Debug si
+  espandono/collassano (`[+]/[-]`) per fare posto a impostazioni future.
+
 ## 2026-06-15
 
 ### Aggiunto

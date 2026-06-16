@@ -81,6 +81,21 @@ CREATE TABLE IF NOT EXISTS mails (
     board       TEXT NOT NULL,
     inserted    INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS reception (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    reservation_id INTEGER NOT NULL,
+    kind           TEXT NOT NULL,     -- 'checkin' | 'checkout'
+    first_name     TEXT NOT NULL,
+    last_name      TEXT NOT NULL,
+    is_child       INTEGER NOT NULL DEFAULT 0,
+    arrived_at     TEXT NOT NULL
+);
 """
 
 _conn = None

@@ -1,4 +1,4 @@
-"""Finestra dello strumento di debug per generare prenotazioni di prova."""
+"""Finestra di debug: sezioni collassabili per le impostazioni di gioco."""
 
 import tkinter as tk
 from datetime import timedelta
@@ -6,144 +6,203 @@ from tkinter import messagebox, ttk
 
 from hotel import budget, clock, constants, debug_seed, mail
 
+from .date_picker import choose_into
 from .utils import format_date_it, parse_date_it
+
+
+class _Section(ttk.Frame):
+    """Sezione con intestazione che la espande o collassa."""
+
+    def __init__(self, master, title, expanded=False):
+        super().__init__(master)
+        self._open = expanded
+        self._title = title
+        self._btn = ttk.Button(self, command=self._toggle)
+        self._btn.pack(fill="x")
+        self.body = ttk.Frame(self, padding=(12, 4))
+        self._sync()
+
+    def _toggle(self):
+        self._open = not self._open
+        self._sync()
+        self.winfo_toplevel().geometry("")  # rifit alla dimensione naturale
+
+    def _sync(self):
+        self._btn.config(text=("[-] " if self._open else "[+] ") + self._title)
+        if self._open:
+            self.body.pack(fill="x")
+        else:
+            self.body.pack_forget()
 
 
 class DebugToolWindow(tk.Toplevel):
     def __init__(self, master, on_done):
         super().__init__(master)
         self.on_done = on_done
-        self.title("Strumento di debug - genera prenotazioni")
+        self.title("Strumento di debug")
         self.resizable(False, False)
         self.transient(master)
         self._build()
 
+    # -- helper di layout -----------------------------------------------------
+
+    @staticmethod
+    def _next(parent) -> int:
+        return parent.grid_size()[1]
+
+    def _field(self, parent, label, key, default, width=12, with_calendar=False):
+        r = self._next(parent)
+        ttk.Label(parent, text=label).grid(row=r, column=0, sticky="w", pady=2)
+        var = tk.StringVar(value=str(default))
+        ttk.Entry(parent, textvariable=var, width=width).grid(
+            row=r, column=1, sticky="w", pady=2)
+        self.vars[key] = var
+        if with_calendar:
+            ttk.Button(parent, text="Cal", width=4,
+                       command=lambda: choose_into(self, var)).grid(
+                row=r, column=2, sticky="w", padx=4)
+
+    def _section(self, title, expanded=False) -> ttk.Frame:
+        sec = _Section(self.outer, title, expanded=expanded)
+        sec.pack(fill="x", pady=2)
+        return sec.body
+
+    # -- costruzione ----------------------------------------------------------
+
     def _build(self):
-        frame = ttk.Frame(self, padding=12)
-        frame.pack(fill="both", expand=True)
         self.vars = {}
-        row = 0
+        self.outer = ttk.Frame(self, padding=8)
+        self.outer.pack(fill="both", expand=True)
 
-        def add_field(label, key, default, width=12):
-            nonlocal row
-            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w",
-                                              pady=2)
-            var = tk.StringVar(value=str(default))
-            ttk.Entry(frame, textvariable=var, width=width).grid(
-                row=row, column=1, sticky="w", pady=2)
-            self.vars[key] = var
-            row += 1
+        self._build_time()
+        self._build_date()
+        self._build_generate()
+        self._build_budget()
+        self._build_mail()
+        ttk.Button(self.outer, text="Chiudi",
+                   command=self.destroy).pack(pady=(8, 0))
 
-        # data attuale simulata (override dell'orologio di sistema)
-        ttk.Label(frame, text="Data attuale (gg/mm/aaaa)").grid(
-            row=row, column=0, sticky="w", pady=2)
+    def _build_time(self):
+        b = self._section("Tempo simulato", expanded=True)
+        self.time_running = tk.BooleanVar(value=clock.running)
+        ttk.Checkbutton(b, text="Avanzamento tempo attivo",
+                        variable=self.time_running).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+        self._field(b, "Scala (ore gioco / 1h reale)", "time_scale",
+                    clock.scale, width=8)
+        ttk.Button(b, text="Applica", command=self._apply_time).grid(
+            row=self._next(b), column=0, columnspan=2, pady=(2, 0), sticky="w")
+
+    def _build_date(self):
+        b = self._section("Data attuale")
+        r = self._next(b)
+        ttk.Label(b, text="Data (gg/mm/aaaa)").grid(row=r, column=0,
+                                                    sticky="w", pady=2)
         self.current_date_var = tk.StringVar(value=format_date_it(clock.today()))
-        ttk.Entry(frame, textvariable=self.current_date_var, width=12).grid(
-            row=row, column=1, sticky="w", pady=2)
-        row += 1
-        date_buttons = ttk.Frame(frame)
-        date_buttons.grid(row=row, column=0, columnspan=2, sticky="w")
-        ttk.Button(date_buttons, text="Imposta data",
+        ttk.Entry(b, textvariable=self.current_date_var, width=12).grid(
+            row=r, column=1, sticky="w", pady=2)
+        ttk.Button(b, text="Cal", width=4,
+                   command=lambda: choose_into(self, self.current_date_var)).grid(
+            row=r, column=2, sticky="w", padx=4)
+        btns = ttk.Frame(b)
+        btns.grid(row=self._next(b), column=0, columnspan=2, sticky="w")
+        ttk.Button(btns, text="Imposta data",
                    command=self._set_date).pack(side="left", padx=(0, 4))
-        ttk.Button(date_buttons, text="Reset a oggi",
+        ttk.Button(btns, text="Reset a oggi",
                    command=self._reset_date).pack(side="left")
-        row += 1
 
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
-                                  sticky="ew", pady=8)
-        row += 1
-
-        add_field("Numero prenotazioni", "count", 30)
-        # l'intervallo parte qualche giorno nel passato cosi diversi soggiorni
-        # coprono oggi e popolano subito la griglia con camere occupate
-        add_field("Data inizio (gg/mm/aaaa)", "start",
-                  format_date_it(clock.today() - timedelta(days=5)))
-        add_field("Data fine (gg/mm/aaaa)", "end",
-                  format_date_it(clock.today() + timedelta(days=14)))
-        add_field("Notti minime", "min_nights", 1, width=6)
-        add_field("Notti massime", "max_nights", 7, width=6)
-
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
-                                  sticky="ew", pady=8)
-        row += 1
-        ttk.Label(frame, text="Prezzo per notte per soluzione:").grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+    def _build_generate(self):
+        b = self._section("Genera prenotazioni", expanded=True)
+        self._field(b, "Numero prenotazioni", "count", 30)
+        self._field(b, "Data inizio (gg/mm/aaaa)", "start",
+                    format_date_it(clock.today()), with_calendar=True)
+        self._field(b, "Data fine (gg/mm/aaaa)", "end",
+                    format_date_it(clock.today() + timedelta(days=14)),
+                    with_calendar=True)
+        self._field(b, "Notti minime", "min_nights", 1, width=6)
+        self._field(b, "Notti massime", "max_nights", 7, width=6)
+        ttk.Label(b, text="Prezzo per notte per soluzione:").grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
         for code, board in constants.BOARDS.items():
-            add_field(f"  {code} - {board.label}", f"price_{code}",
-                      debug_seed.DEFAULT_BOARD_PRICES[code], width=8)
-
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
-                                  sticky="ew", pady=8)
-        row += 1
+            self._field(b, f"  {code} - {board.label}", f"price_{code}",
+                        debug_seed.DEFAULT_BOARD_PRICES[code], width=8)
         self.random_colors = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="Assegna colori casuali",
+        ttk.Checkbutton(b, text="Assegna colori casuali",
                         variable=self.random_colors).grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+            row=self._next(b), column=0, columnspan=2, sticky="w")
         self.auto_checkin = tk.BooleanVar(value=True)
-        ttk.Checkbutton(frame, text="Check-in automatico per i soggiorni"
-                                    " attivi oggi",
-                        variable=self.auto_checkin).grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+        ttk.Checkbutton(b, text="Check-in automatico per i soggiorni attivi"
+                               " oggi", variable=self.auto_checkin).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+        btns = ttk.Frame(b)
+        btns.grid(row=self._next(b), column=0, columnspan=2, pady=(6, 0),
+                  sticky="w")
+        ttk.Button(btns, text="Genera",
+                   command=self._generate).pack(side="left", padx=(0, 4))
+        ttk.Button(btns, text="Svuota database",
+                   command=self._clear).pack(side="left")
 
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
-                                  sticky="ew", pady=8)
-        row += 1
-        ttk.Label(frame, text="Aggiungi movimento al budget:").grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
-        ttk.Label(frame, text="Tipo").grid(row=row, column=0, sticky="w", pady=2)
-        self.budget_kind = ttk.Combobox(frame, width=10, state="readonly",
+    def _build_budget(self):
+        b = self._section("Budget")
+        r = self._next(b)
+        ttk.Label(b, text="Tipo").grid(row=r, column=0, sticky="w", pady=2)
+        self.budget_kind = ttk.Combobox(b, width=10, state="readonly",
                                         values=("Introito", "Perdita"))
         self.budget_kind.set("Introito")
-        self.budget_kind.grid(row=row, column=1, sticky="w", pady=2)
-        row += 1
-        add_field("Categoria", "b_category", "Bolletta", width=16)
-        add_field("Importo", "b_amount", "0", width=10)
-        add_field("Nota", "b_note", "", width=22)
-        ttk.Button(frame, text="Aggiungi a budget",
-                   command=self._add_budget).grid(
-            row=row, column=0, columnspan=2, pady=(2, 0))
-        row += 1
+        self.budget_kind.grid(row=r, column=1, sticky="w", pady=2)
+        self._field(b, "Categoria", "b_category", "Bolletta", width=16)
+        self._field(b, "Importo", "b_amount", "0", width=10)
+        self._field(b, "Nota", "b_note", "", width=22)
+        ttk.Button(b, text="Aggiungi a budget", command=self._add_budget).grid(
+            row=self._next(b), column=0, columnspan=2, pady=(2, 0), sticky="w")
 
-        ttk.Separator(frame).grid(row=row, column=0, columnspan=2,
-                                  sticky="ew", pady=8)
-        row += 1
-        ttk.Label(frame, text="Gameplay - Email:").grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+    def _build_mail(self):
+        b = self._section("Gameplay - Email")
         self.mail_enabled = tk.BooleanVar(value=mail.config.enabled)
-        ttk.Checkbutton(frame, text="Attiva arrivo email",
+        ttk.Checkbutton(b, text="Attiva arrivo email",
                         variable=self.mail_enabled).grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
+            row=self._next(b), column=0, columnspan=2, sticky="w")
         self.mail_auto = tk.BooleanVar(value=mail.config.auto_insert)
-        ttk.Checkbutton(frame, text="Inserimento automatico",
+        ttk.Checkbutton(b, text="Inserimento automatico",
                         variable=self.mail_auto).grid(
-            row=row, column=0, columnspan=2, sticky="w")
-        row += 1
-        add_field("Intervallo (secondi)", "mail_interval",
-                  mail.config.interval_seconds, width=8)
-        add_field("Probabilita (0-1)", "mail_prob",
-                  mail.config.probability, width=8)
-        mail_buttons = ttk.Frame(frame)
-        mail_buttons.grid(row=row, column=0, columnspan=2, sticky="w")
-        ttk.Button(mail_buttons, text="Applica",
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+        self._field(b, "Intervallo (secondi)", "mail_interval",
+                    mail.config.interval_seconds, width=8)
+        self._field(b, "Prob. standard (matt./pom.)", "mail_prob",
+                    mail.config.probability, width=8)
+        self._field(b, "  Prob. pranzo", "mail_p_pranzo",
+                    mail.config.shift_probability.get("Pranzo", 0.2), width=8)
+        self._field(b, "  Prob. sera", "mail_p_sera",
+                    mail.config.shift_probability.get("Sera", 0.2), width=8)
+        self._field(b, "  Prob. notte", "mail_p_notte",
+                    mail.config.shift_probability.get("Notte", 0.05), width=8)
+        self._field(b, "Prob. ospiti abituali (0-1)", "mail_returning",
+                    mail.config.returning_probability, width=8)
+        self._field(b, "Finestra prenotazioni (giorni)", "mail_window",
+                    mail.config.window_days, width=8)
+        btns = ttk.Frame(b)
+        btns.grid(row=self._next(b), column=0, columnspan=2, sticky="w")
+        ttk.Button(btns, text="Applica",
                    command=self._apply_mail).pack(side="left", padx=(0, 4))
-        ttk.Button(mail_buttons, text="Crea email ora",
+        ttk.Button(btns, text="Crea email ora",
                    command=self.master.spawn_mail).pack(side="left")
-        row += 1
 
-        buttons = ttk.Frame(frame)
-        buttons.grid(row=row, column=0, columnspan=2, pady=(12, 0))
-        ttk.Button(buttons, text="Genera",
-                   command=self._generate).pack(side="left", padx=4)
-        ttk.Button(buttons, text="Svuota database",
-                   command=self._clear).pack(side="left", padx=4)
-        ttk.Button(buttons, text="Chiudi",
-                   command=self.destroy).pack(side="left", padx=4)
+    # -- azioni ---------------------------------------------------------------
+
+    def _apply_time(self):
+        try:
+            scale = float(self.vars["time_scale"].get().replace(",", "."))
+        except ValueError:
+            messagebox.showerror("Errore", "Scala non valida.", parent=self)
+            return
+        if scale <= 0:
+            messagebox.showerror("Errore", "La scala deve essere positiva.",
+                                 parent=self)
+            return
+        clock.scale = scale
+        clock.running = self.time_running.get()
+        messagebox.showinfo("Debug", "Impostazioni tempo applicate.",
+                            parent=self)
 
     def _read_config(self) -> debug_seed.SeedConfig | None:
         """Legge e valida i campi; mostra un errore e ritorna None se invalidi."""
@@ -186,7 +245,7 @@ class DebugToolWindow(tk.Toplevel):
         """Riposiziona l'intervallo di generazione attorno alla data attuale."""
         today = clock.today()
         self.current_date_var.set(format_date_it(today))
-        self.vars["start"].set(format_date_it(today - timedelta(days=5)))
+        self.vars["start"].set(format_date_it(today))
         self.vars["end"].set(format_date_it(today + timedelta(days=14)))
 
     def _set_date(self):
@@ -226,6 +285,13 @@ class DebugToolWindow(tk.Toplevel):
         try:
             interval = int(self.vars["mail_interval"].get())
             prob = float(self.vars["mail_prob"].get().replace(",", "."))
+            returning = float(self.vars["mail_returning"].get().replace(",", "."))
+            window = int(self.vars["mail_window"].get())
+            clamp = lambda key: min(max(float(self.vars[key].get()
+                                              .replace(",", ".")), 0.0), 1.0)
+            shift_probs = {"Pranzo": clamp("mail_p_pranzo"),
+                           "Sera": clamp("mail_p_sera"),
+                           "Notte": clamp("mail_p_notte")}
         except ValueError:
             messagebox.showerror("Errore", "Intervallo/probabilita non validi.",
                                  parent=self)
@@ -234,6 +300,9 @@ class DebugToolWindow(tk.Toplevel):
         mail.config.auto_insert = self.mail_auto.get()
         mail.config.interval_seconds = max(interval, 1)
         mail.config.probability = min(max(prob, 0.0), 1.0)
+        mail.config.returning_probability = min(max(returning, 0.0), 1.0)
+        mail.config.window_days = max(window, 0)
+        mail.config.shift_probability = shift_probs
         messagebox.showinfo("Debug", "Impostazioni email applicate.",
                             parent=self)
 

@@ -4,8 +4,9 @@ import os
 import random
 import sys
 import tempfile
+import time as _time
 from collections import defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -17,7 +18,8 @@ if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
 from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
-                   guests, mail, meals, reservations, rooms)
+                   guests, mail, meals, persistence, reception, reservations,
+                   rooms)
 
 failures = []
 
@@ -53,6 +55,14 @@ res_id = reservations.create_reservation(
 res = reservations.get(res_id)
 check("codice prenotazione",
       res["code"] == f"2pax | @{today.strftime('%d/%m')} | BB | Pagdir")
+
+# il @ del codice e la data di prenotazione (oggi), non il check-in futuro
+future_id = reservations.create_reservation(
+    first_name="Futuro", last_name="Ospite", room_number=105, checkin=d(5),
+    checkout=d(7), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+check("codice @ = data prenotazione, non check-in",
+      f"@{today.strftime('%d/%m')}" in reservations.get(future_id)["code"])
 
 check("camera occupata nel periodo non disponibile",
       not reservations.is_room_available(101, d(1), d(2)))
@@ -125,7 +135,7 @@ res = reservations.get(res_id)
 check("stato checked_in", res["status"] == "checked_in")
 check("camera sporca dopo il check-in", rooms.get_room(101)["dirty"] == 1)
 check("camera risulta occupata",
-      reservations.current_for_room(101, today) is not None)
+      reservations.current_for_room(101) is not None)
 
 # ospite abituale: stesso nome+data nascita -> riusato, non duplicato
 gid1 = guests.upsert({"first_name": "Mario", "last_name": "Rossi",
@@ -198,7 +208,7 @@ check("suite RES: 3h al check-out",
 # camere gia in checked_out compaiono comunque nel foglio del giorno
 reservations.do_checkout(res_id)
 check("dopo il check-out la camera e libera",
-      reservations.current_for_room(101, today) is None)
+      reservations.current_for_room(101) is None)
 check("dopo il check-out resta sporca", rooms.get_room(101)["dirty"] == 1)
 check("camera partita resta nel foglio pulizie del giorno di check-out",
       101 in {t.room_number for t in cleaning.tasks_for_day(d(3))})
@@ -293,6 +303,70 @@ check("clock override attivo", clock.today() == d(10))
 clock.set_today(None)
 check("clock reset alla data reale", clock.today() == date.today())
 
+# turni della giornata
+check("turno mattina", clock.shift(datetime(2026, 1, 1, 9))[0] == "Mattina")
+check("turno pranzo", clock.shift(datetime(2026, 1, 1, 13))[0] == "Pranzo")
+check("turno pomeriggio",
+      clock.shift(datetime(2026, 1, 1, 16))[0] == "Pomeriggio")
+check("turno sera", clock.shift(datetime(2026, 1, 1, 20))[0] == "Sera")
+check("turno notte dopo mezzanotte",
+      clock.shift(datetime(2026, 1, 1, 2))[0] == "Notte")
+check("turno notte prima delle 7",
+      clock.shift(datetime(2026, 1, 1, 23, 30))[0] == "Notte")
+
+# avanzamento del tempo in scala
+clock.set_now(datetime(2026, 1, 1, 12))
+clock.scale = 3600          # 1s reale -> 3600s gioco = 1h gioco
+clock.running = True
+clock._last_mono = _time.monotonic() - 2.0   # finge 2s reali trascorsi
+clock.tick()
+delta_h = (clock.now() - datetime(2026, 1, 1, 12)).total_seconds() / 3600
+check("tempo avanza in scala (~2h gioco per 2s reali a 3600x)",
+      1.9 <= delta_h <= 2.6)
+clock.running = False
+clock.set_now(None)
+clock.scale = 24.0
+clock._last_mono = None
+
+# controllo velocita: moltiplicatore live che NON tocca le basi del debug
+clock.scale = 24.0
+clock.speed = 1.0
+clock.paused = False
+clock.realtime = False
+check("velocita 1x = base (freq_factor 1)", clock.freq_factor() == 1.0)
+clock.speed = 5.0
+check("5x: freq_factor segue la velocita", clock.freq_factor() == 5.0)
+check("5x NON cambia la scala base (debug)", clock.scale == 24.0)
+clock.realtime = True
+check("T (tempo reale): freq_factor 1", clock.freq_factor() == 1.0)
+clock.paused = True
+check("pausa: freq_factor 0", clock.freq_factor() == 0.0)
+
+# il tick scala per speed; in pausa congela
+clock.realtime = False
+clock.paused = False
+clock.set_now(datetime(2026, 1, 1, 12))
+clock.scale = 10.0
+clock.speed = 3.0
+clock.running = True
+clock._last_mono = _time.monotonic() - 1.0
+clock.tick()
+adv = (clock.now() - datetime(2026, 1, 1, 12)).total_seconds()
+check("tick avanza scale*speed (~10*3 game-sec/sec)", 25 <= adv <= 45)
+clock.paused = True
+clock._last_mono = _time.monotonic() - 1.0
+frozen = clock.now()
+clock.tick()
+check("pausa congela il tempo", clock.now() == frozen)
+
+clock.paused = False
+clock.realtime = False
+clock.speed = 1.0
+clock.running = False
+clock.scale = 24.0
+clock.set_now(None)
+clock._last_mono = None
+
 # --- gameplay email ----------------------------------------------------------
 debug_seed.clear_all()
 mail.rng.seed(7)
@@ -308,7 +382,6 @@ room = mail.insert(mid)
 check("insert email crea prenotazione in una camera valida",
       rooms.get_room(room) is not None)
 check("email segnata come inserita", mail.get(mid)["inserted"] == 1)
-res_room = reservations.current_for_room(room, date.fromisoformat(m["checkin"]))
 booked = reservations.arrival_on(room, date.fromisoformat(m["checkin"]))
 check("prenotazione creata coi nomi della mail",
       booked is not None and booked["last_name"] == m["last_name"])
@@ -323,6 +396,150 @@ mail.config.auto_insert = True
 mid2 = mail.spawn()
 check("auto-insert: email inserita allo spawn", mail.get(mid2)["inserted"] == 1)
 mail.config.auto_insert = False
+
+# mittente senza spazi anche con cognomi composti (es. "De Luca")
+check("email mittente senza spazi (cognomi composti)",
+      all(" " not in mail.get(mail.spawn())["sender"] for _ in range(40)))
+
+# ospiti abituali: riuso del DB ospiti, niente doppioni
+debug_seed.clear_all()
+mail.config.auto_insert = False
+guests.upsert({"first_name": "Anna", "last_name": "Bianchi",
+               "birth_date": "01/01/1990"})
+mail.config.returning_probability = 1.0
+pick = mail._pick_returning_guest()
+check("ospite abituale riusato dalla mail",
+      pick is not None and pick["last_name"] == "Bianchi")
+m_ret = mail.get(mail.spawn())
+check("email usa nome ed email dell'ospite abituale",
+      m_ret["last_name"] == "Bianchi"
+      and m_ret["sender"] == "anna.bianchi@email.com")
+
+reservations.create_reservation(
+    first_name="Anna", last_name="Bianchi", room_number=101,
+    checkin=today, checkout=d(2), adults=1, children=0, price_per_night=80,
+    board="BB", discount=None, phone="", email="", color="", comments="")
+check("abituale con prenotazione attiva escluso (no doppioni)",
+      mail._pick_returning_guest() is None)
+
+mail.config.returning_probability = 0.0
+check("prob abituali 0 -> nessun riuso", mail._pick_returning_guest() is None)
+mail.config.returning_probability = 0.5
+
+# finestra prenotazioni mail: check-in entro window_days dal tempo simulato
+debug_seed.clear_all()
+mail.config.auto_insert = False
+mail.config.window_days = 3
+clock.set_now(datetime(2026, 7, 1, 16))
+base = clock.today()
+offsets = [(date.fromisoformat(mail.get(mail.spawn())["checkin"]) - base).days
+           for _ in range(30)]
+check("mail: check-in entro la finestra configurata (window_days)",
+      all(0 <= o <= 3 for o in offsets) and max(offsets) >= 1)
+clock.set_now(None)
+mail.config.window_days = 5
+
+# frequenza mail variabile per turno
+mail.config.probability = 0.5
+mail.config.shift_probability = {"Pranzo": 0.2, "Sera": 0.2, "Notte": 0.05}
+p_at = lambda hour: (clock.set_now(datetime(2026, 1, 1, hour)),
+                     mail.shift_probability())[1]
+check("mail standard di mattina", p_at(9) == 0.5)
+check("mail standard di pomeriggio", p_at(16) == 0.5)
+check("mail rara a pranzo", p_at(13) == 0.2)
+check("mail rara di sera", p_at(20) == 0.2)
+check("mail rarissima di notte ma non zero", 0 < p_at(2) <= 0.05)
+clock.set_now(None)
+
+# --- reception (arrivi e partenze) -------------------------------------------
+debug_seed.clear_all()
+afternoon = datetime(today.year, today.month, today.day, 16)
+morning = datetime(today.year, today.month, today.day, 9)
+
+rid = reservations.create_reservation(
+    first_name="Carlo", last_name="Neri", room_number=101,
+    checkin=today, checkout=d(3), adults=2, children=1, price_per_night=80,
+    board="BB", discount=None, phone="", email="", color="", comments="")
+
+# tutti gli ospiti spawnano insieme, una riga ciascuno
+reception._spawn_checkin(reservations.get(rid), afternoon)
+check("reception: una riga per persona (2 adulti + 1 bambino)",
+      len(reception.pending()) == 3)
+
+# check-in per-persona: la prima occupa la camera, la riga sparisce
+reception.checkin_entry(reception.pending()[0]["id"])
+check("reception: primo check-in occupa la camera",
+      reservations.current_for_room(101) is not None)
+check("reception: la riga sparisce dopo il check-in",
+      len(reception.pending()) == 2)
+for e in list(reception.pending()):
+    reception.checkin_entry(e["id"])
+check("reception: check-in di tutti svuota la coda",
+      not reception.pending())
+n_guests = database.get_conn().execute(
+    "SELECT COUNT(*) FROM reservation_guests WHERE reservation_id = ?",
+    (rid,)).fetchone()[0]
+check("reception: registrati tutti e 3 gli ospiti", n_guests == 3)
+
+# arrivi solo di Pomeriggio/Sera, mai Mattina/Pranzo/Notte; max uno per tick
+debug_seed.clear_all()
+for room in range(101, 106):
+    reservations.create_reservation(
+        first_name="A", last_name=str(room), room_number=room, checkin=today,
+        checkout=d(2), adults=1, children=0, price_per_night=50, board="RO",
+        discount=None, phone="", email="", color="", comments="")
+clock.speed = 5.0   # alza la probabilita per stressare il gate
+for hour in (9, 13, 1):   # Mattina, Pranzo, Notte
+    clock.set_now(datetime(today.year, today.month, today.day, hour))
+    for _ in range(30):
+        reception.maybe_spawn()
+check("reception: nessun arrivo fuori da Pomeriggio/Sera", not reception.pending())
+clock.set_now(datetime(today.year, today.month, today.day, 16))  # Pomeriggio
+reception.maybe_spawn()
+check("reception: al massimo un arrivo per tick", len(reception.pending()) <= 1)
+clock.speed = 1.0
+clock.set_now(None)
+
+# partenze: dovute solo per checked_in con check-out oggi
+debug_seed.clear_all()
+rid3 = reservations.create_reservation(
+    first_name="C", last_name="D", room_number=103, checkin=d(-2),
+    checkout=today, adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid3, {"first_name": "C", "last_name": "D"})
+check("reception: partenza dovuta trovata",
+      len(reception._due_departures(today)) == 1)
+reception._spawn_checkout(reservations.get(rid3), morning)
+check("reception: spawn check-out una sola riga",
+      len(reception.pending()) == 1 and reception.pending()[0]["kind"] == "checkout")
+
+# --- persistenza stato di gioco ----------------------------------------------
+clock.set_now(datetime(2026, 3, 1, 8, 30))
+clock.scale = 50.0
+clock.running = True
+mail.config.enabled = True
+mail.config.interval_seconds = 17
+mail.config.probability = 0.3
+persistence.save()
+
+clock.set_now(None)
+clock.scale = 24.0
+clock.running = False
+mail.config.enabled = False
+mail.config.interval_seconds = 60
+mail.config.probability = 0.5
+persistence.load()
+
+check("persistenza: ora simulata ripristinata",
+      clock.now() == datetime(2026, 3, 1, 8, 30))
+check("persistenza: scala ripristinata", clock.scale == 50.0)
+check("persistenza: running ripristinato", clock.running is True)
+check("persistenza: config email ripristinata",
+      mail.config.enabled is True and mail.config.interval_seconds == 17
+      and mail.config.probability == 0.3)
+clock.set_now(None)
+clock.running = False
+mail.config.enabled = False
 
 print()
 if failures:
