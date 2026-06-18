@@ -111,10 +111,13 @@ def current_for_room(room_number: int):
 
 
 def arrival_on(room_number: int, day: date):
-    """Prenotazione con check-in esattamente nel giorno indicato (un arrivo)."""
+    """Prenotazione ancora in arrivo (non ancora arrivata) nel giorno indicato.
+
+    Solo 'booked': dopo il check-in il marcatore di arrivo deve sparire.
+    """
     return get_conn().execute(
         "SELECT * FROM reservations WHERE room_number = ?"
-        " AND status IN ('booked', 'checked_in') AND checkin_date = ?"
+        " AND status = 'booked' AND checkin_date = ?"
         " ORDER BY id LIMIT 1",
         (room_number, day.isoformat())).fetchone()
 
@@ -202,8 +205,11 @@ def checkin_guest(res_id: int, guest: dict) -> None:
         rooms.set_dirty(res["room_number"], True)
 
 
-def do_checkout(res_id: int) -> None:
-    """Conferma il check-out: la camera si libera ma resta sporca."""
+def do_checkout(res_id: int, *, paid: bool = True) -> None:
+    """Conferma il check-out: la camera si libera ma resta sporca.
+
+    Con paid=False (uscita d'ufficio) registra a bilancio importo 0.
+    """
     res = get(res_id)
     if res is None or res["status"] != "checked_in":
         raise ValidationError("Prenotazione non valida per il check-out.")
@@ -213,12 +219,35 @@ def do_checkout(res_id: int) -> None:
     conn.commit()
     rooms.set_dirty(res["room_number"], True)
 
+    if not paid:
+        budget.record(budget.INCOME, "Soggiorno", 0, "L'ospite non ha pagato.")
+        return
+
     # il conto alimenta il bilancio: netto come introito, IVA come perdita
     t = billing.bill_totals(res)
     note = f"Camera {res['room_number']} - {guest_display_name(res)}"
     budget.record(budget.INCOME, "Soggiorno", t["net"], note)
     if t["vat"]:
         budget.record(budget.LOSS, "IVA", t["vat"], note)
+
+
+def auto_checkout_overstayers(now) -> int:
+    """Sicurezza: chi e ancora in camera il giorno di check-out dopo le 14:30
+    (o gia oltre) viene fatto uscire d'ufficio, senza addebito. Ritorna quanti."""
+    from . import reception   # import differito: evita il ciclo
+    today = now.date().isoformat()
+    deadline = now.replace(hour=14, minute=30, second=0, microsecond=0)
+    rows = get_conn().execute(
+        "SELECT id, checkout_date FROM reservations WHERE status = 'checked_in'"
+        " AND checkout_date <= ?", (today,)).fetchall()
+    done = 0
+    for r in rows:
+        if r["checkout_date"] < today or now >= deadline:
+            get_conn().execute(
+                "DELETE FROM reception WHERE reservation_id = ?", (r["id"],))
+            do_checkout(r["id"], paid=False)
+            done += 1
+    return done
 
 
 def guest_display_name(res) -> str:

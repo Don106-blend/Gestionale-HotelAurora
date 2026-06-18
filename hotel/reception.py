@@ -9,12 +9,13 @@ spawnano insieme); il check-out e per prenotazione.
 import random
 from datetime import date, datetime, time, timedelta
 
-from . import clock, names, reservations
+from . import clock, guests, names, reservations
 from .database import get_conn
 
 rng = random.Random()
 ARRIVAL_WINDOW = (15, 23)    # Pomeriggio + Sera
 DEPARTURE_WINDOW = (7, 12)   # Mattina
+ANGER_HOURS = 1.5            # attesa al check-in oltre cui l'ospite si arrabbia
 
 
 def _scheduled_time(kind: str, reservation_id: int, day, window):
@@ -83,6 +84,31 @@ def maybe_spawn():
             if (now >= _scheduled_time("dep", res["id"], today, DEPARTURE_WINDOW)
                     and not guest_state.reservation_at_meal(res["id"], now)):
                 _spawn_checkout(res, now)
+
+
+def handle_anger(now) -> int:
+    """Chi aspetta il check-in oltre 1,5h si arrabbia: annulla la prenotazione,
+    sparisce dalla reception, manda un reclamo e finisce in blacklist. Ritorna
+    quanti ospiti si sono arrabbiati."""
+    from . import mail   # import differito
+    cutoff = (now - timedelta(hours=ANGER_HOURS)).isoformat()
+    res_ids = [r["reservation_id"] for r in get_conn().execute(
+        "SELECT DISTINCT rc.reservation_id FROM reception rc"
+        " JOIN reservations r ON r.id = rc.reservation_id"
+        " WHERE rc.kind = 'checkin' AND r.status = 'booked'"
+        " AND rc.arrived_at <= ?", (cutoff,)).fetchall()]
+    for rid in res_ids:
+        res = reservations.get(rid)
+        if res is None:
+            continue
+        mail.spawn_complaint(res)
+        conn = get_conn()
+        conn.execute("DELETE FROM reception WHERE reservation_id = ?", (rid,))
+        conn.execute("UPDATE reservations SET status = 'cancelled' WHERE id = ?",
+                     (rid,))
+        conn.commit()
+        guests.add_to_blacklist(res["first_name"], res["last_name"])
+    return len(res_ids)
 
 
 def pending():

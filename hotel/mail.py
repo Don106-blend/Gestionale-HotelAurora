@@ -7,7 +7,7 @@ aggiungerne uno = appenderlo a TEMPLATES.
 
 import random
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from . import clock, constants, names, reservations
 from .database import get_conn
@@ -56,6 +56,16 @@ Cordiali saluti,
 {name} - {email}""",
 )
 
+EXPIRY_HOURS = 48  # una richiesta non gestita scade dopo 48h
+
+# Reclamo di chi si e arrabbiato aspettando il check-in: mail "spam", non inseribile.
+COMPLAINT_TEMPLATE = """Spett.le Hotel,
+sono {name} e avevo prenotato dal {checkin} al {checkout}.
+Sono arrivato in reception e ho aspettato oltre un'ora e mezza senza che
+nessuno mi facesse il check-in. Stanco di aspettare ho annullato il soggiorno.
+Non mettero mai piu piede nel vostro hotel.
+{name}"""
+
 
 def _it(iso: str) -> str:
     return date.fromisoformat(iso).strftime("%d/%m/%Y")
@@ -75,7 +85,11 @@ def _pick_returning_guest():
         "  SELECT 1 FROM reservations r"
         "  WHERE r.status IN ('booked', 'checked_in')"
         "  AND r.first_name = g.first_name COLLATE NOCASE"
-        "  AND r.last_name = g.last_name COLLATE NOCASE)").fetchall()
+        "  AND r.last_name = g.last_name COLLATE NOCASE)"
+        " AND NOT EXISTS ("                       # esclude chi si e arrabbiato
+        "  SELECT 1 FROM blacklist b"
+        "  WHERE b.first_name = g.first_name COLLATE NOCASE"
+        "  AND b.last_name = g.last_name COLLATE NOCASE)").fetchall()
     return rng.choice(rows) if rows else None
 
 
@@ -118,7 +132,7 @@ def spawn() -> int:
         "INSERT INTO mails (received_at, sender, subject, body, first_name,"
         " last_name, checkin, checkout, adults, children, board)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (clock.today().isoformat(), data["email"],
+        (clock.now().isoformat(), data["email"],
          f"Richiesta prenotazione {_it(data['checkin'])}", _render(data),
          data["first_name"], data["last_name"], data["checkin"],
          data["checkout"], data["adults"], data["children"], data["board"]))
@@ -132,8 +146,34 @@ def spawn() -> int:
     return mail_id
 
 
+def spawn_complaint(res) -> int:
+    """Mail di reclamo (spam) dell'ospite arrabbiato: niente da inserire."""
+    name = f"{res['first_name']} {res['last_name']}".strip()
+    body = COMPLAINT_TEMPLATE.format(name=name, checkin=_it(res["checkin_date"]),
+                                     checkout=_it(res["checkout_date"]))
+    cur = get_conn().execute(
+        "INSERT INTO mails (received_at, sender, subject, body, first_name,"
+        " last_name, checkin, checkout, adults, children, board, kind)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'spam')",
+        (clock.now().isoformat(), res["email"] or "ospite@email.com",
+         "Reclamo: attesa al check-in", body, res["first_name"],
+         res["last_name"], res["checkin_date"], res["checkout_date"],
+         res["adults"], res["children"], res["board"]))
+    get_conn().commit()
+    return cur.lastrowid
+
+
 def all_mails():
     return get_conn().execute("SELECT * FROM mails ORDER BY id DESC").fetchall()
+
+
+def search_mails(term: str = "", archived: bool = False):
+    """Email filtrate per testo (mittente/oggetto/nome) e stato archiviazione."""
+    like = f"%{term.strip()}%"
+    return get_conn().execute(
+        "SELECT * FROM mails WHERE archived = ? AND (sender LIKE ?"
+        " OR subject LIKE ? OR first_name LIKE ? OR last_name LIKE ?)"
+        " ORDER BY id DESC", (int(archived), like, like, like, like)).fetchall()
 
 
 def get(mail_id: int):
@@ -141,12 +181,52 @@ def get(mail_id: int):
         "SELECT * FROM mails WHERE id = ?", (mail_id,)).fetchone()
 
 
+def is_expired(m, now: datetime | None = None) -> bool:
+    """Scaduta: passate 48h dalla ricezione o superata la data di check-in."""
+    now = now or clock.now()
+    if datetime.fromisoformat(m["received_at"]) + timedelta(hours=EXPIRY_HOURS) <= now:
+        return True
+    return date.fromisoformat(m["checkin"]) < now.date()
+
+
+def status(m, now: datetime | None = None) -> str:
+    """Etichetta di stato: Spam / Inserita / Rifiutata / Scaduta / Da gestire."""
+    if m["kind"] == "spam":
+        return "Spam"
+    if m["inserted"]:
+        return "Inserita"
+    if m["rejected"]:
+        return "Rifiutata"
+    if is_expired(m, now):
+        return "Scaduta"
+    return "Da gestire"
+
+
+def reject(mail_id: int) -> None:
+    get_conn().execute(
+        "UPDATE mails SET rejected = 1 WHERE id = ? AND inserted = 0", (mail_id,))
+    get_conn().commit()
+
+
+def archive(mail_id: int) -> None:
+    get_conn().execute("UPDATE mails SET archived = 1 WHERE id = ?", (mail_id,))
+    get_conn().commit()
+
+
+def delete(mail_id: int) -> None:
+    get_conn().execute("DELETE FROM mails WHERE id = ?", (mail_id,))
+    get_conn().commit()
+
+
 def insert(mail_id: int) -> int:
     """Crea la prenotazione dalla mail e la marca inserita. Ritorna la camera.
-    Solleva ValidationError se gia inserita o senza camere libere."""
+    Solleva ValidationError se non inseribile o senza camere libere."""
     m = get(mail_id)
-    if m is None or m["inserted"]:
-        raise reservations.ValidationError("Email gia inserita.")
+    if m is None:
+        raise reservations.ValidationError("Email inesistente.")
+    st = status(m)
+    if st != "Da gestire":
+        raise reservations.ValidationError(f"Email {st.lower()}: non inseribile.")
     checkin = date.fromisoformat(m["checkin"])
     checkout = date.fromisoformat(m["checkout"])
     free = reservations.available_rooms(checkin, checkout)

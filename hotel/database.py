@@ -80,7 +80,15 @@ CREATE TABLE IF NOT EXISTS mails (
     adults      INTEGER NOT NULL,
     children    INTEGER NOT NULL,
     board       TEXT NOT NULL,
-    inserted    INTEGER NOT NULL DEFAULT 0
+    inserted    INTEGER NOT NULL DEFAULT 0,
+    kind        TEXT NOT NULL DEFAULT 'request',  -- 'request' | 'spam'
+    rejected    INTEGER NOT NULL DEFAULT 0,
+    archived    INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS blacklist (
+    first_name TEXT NOT NULL,
+    last_name  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -120,6 +128,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     cols = [r[1] for r in conn.execute("PRAGMA table_info(reservation_guests)")]
     if "checked_in_at" not in cols:
         conn.execute("ALTER TABLE reservation_guests ADD COLUMN checked_in_at TEXT")
+    mail_cols = [r[1] for r in conn.execute("PRAGMA table_info(mails)")]
+    for col, ddl in (("kind", "TEXT NOT NULL DEFAULT 'request'"),
+                     ("rejected", "INTEGER NOT NULL DEFAULT 0"),
+                     ("archived", "INTEGER NOT NULL DEFAULT 0")):
+        if col not in mail_cols:
+            conn.execute(f"ALTER TABLE mails ADD COLUMN {col} {ddl}")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:

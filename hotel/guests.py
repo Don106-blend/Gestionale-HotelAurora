@@ -16,6 +16,14 @@ def all_guests():
         "SELECT * FROM guests ORDER BY last_name, first_name").fetchall()
 
 
+def add_to_blacklist(first_name: str, last_name: str) -> None:
+    """Ospite che non tornera piu come abituale (es. arrabbiato al check-in)."""
+    conn = get_conn()
+    conn.execute("INSERT INTO blacklist (first_name, last_name) VALUES (?, ?)",
+                 (first_name.strip(), last_name.strip()))
+    conn.commit()
+
+
 def for_reservation(res_id: int):
     """Ospiti registrati per la prenotazione, con id riga, check-in e board."""
     return get_conn().execute(

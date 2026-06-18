@@ -152,5 +152,6 @@ def clear_all() -> None:
     conn.execute("DELETE FROM ledger")
     conn.execute("DELETE FROM mails")
     conn.execute("DELETE FROM reception")
+    conn.execute("DELETE FROM blacklist")
     conn.execute("UPDATE rooms SET dirty = 0, blocked = 0")
     conn.commit()

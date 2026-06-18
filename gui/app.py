@@ -4,7 +4,7 @@ import random
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import clock, mail, persistence, reception
+from hotel import clock, mail, persistence, reception, reservations
 
 from .booking_form import BookingForm
 from .budget_view import BudgetWindow
@@ -222,7 +222,12 @@ class HotelApp(tk.Tk):
     def _time_tick(self):
         clock.tick()
         if clock.running:
+            now = clock.now()
             reception.maybe_spawn()   # arrivi/partenze in base al turno
+            changed = reception.handle_anger(now)         # ospiti spazientiti
+            changed += reservations.auto_checkout_overstayers(now)  # uscite d'ufficio
+            if changed:
+                self.refresh()
         self._update_time_display()
         if clock.today() != self._last_shown_day:  # giorno avanzato: aggiorna
             self._last_shown_day = clock.today()

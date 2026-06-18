@@ -42,12 +42,23 @@ class MailView(tk.Toplevel):
 
         btns = ttk.Frame(frame)
         btns.pack(fill="x")
-        if m["inserted"]:
-            ttk.Label(btns, text="Prenotazione gia inserita.").pack(side="left")
-        else:
+        st = mail.status(m)
+        if st == "Da gestire":     # solo le richieste aperte sono azionabili
             ttk.Button(btns, text="Inserisci automaticamente",
                        command=self._insert).pack(side="left")
+            reject = ttk.Button(btns, text="Rifiuta", command=self._reject)
+            reject.pack(side="left", padx=4)
+            if not self._has_rooms(m):   # hotel pieno: rifiuto come scelta di default
+                reject.focus_set()
+        else:
+            ttk.Label(btns, text=f"Stato: {st}").pack(side="left")
         ttk.Button(btns, text="Chiudi", command=self.destroy).pack(side="right")
+
+    @staticmethod
+    def _has_rooms(m) -> bool:
+        from datetime import date
+        return bool(reservations.available_rooms(
+            date.fromisoformat(m["checkin"]), date.fromisoformat(m["checkout"])))
 
     def _insert(self):
         try:
@@ -58,42 +69,85 @@ class MailView(tk.Toplevel):
         self.on_change()
         messagebox.showinfo("Email", f"Prenotazione inserita in camera {room}.",
                             parent=self)
-        self._build()
+        self.destroy()             # scelta fatta: si chiude da sola
+
+    def _reject(self):
+        mail.reject(self.mail_id)
+        self.on_change()
+        self.destroy()
 
 
 class MailInbox(tk.Toplevel):
-    """Casella di posta: elenco delle email, doppio click per riaprirle."""
+    """Casella di posta: ricerca, archiviazione, eliminazione delle email."""
 
-    COLUMNS = (("received_at", "Ricevuta", 90), ("sender", "Mittente", 200),
-               ("subject", "Oggetto", 220), ("inserted", "Stato", 90))
+    COLUMNS = (("received_at", "Ricevuta", 130), ("sender", "Mittente", 180),
+               ("subject", "Oggetto", 220), ("status", "Stato", 90))
 
     def __init__(self, master, on_change=None):
         super().__init__(master)
         self.on_change = on_change or (lambda: None)
         self.title("Mail")
         self.transient(master)
+        self.search_var = tk.StringVar()
+        self.show_archived = tk.BooleanVar(value=False)
         self._build()
+        self._reload()
 
     def _build(self):
-        for c in self.winfo_children():
-            c.destroy()
         frame = ttk.Frame(self, padding=12)
         frame.pack(fill="both", expand=True)
+        top = ttk.Frame(frame)
+        top.pack(fill="x")
+        ttk.Label(top, text="Cerca:").pack(side="left")
+        ent = ttk.Entry(top, textvariable=self.search_var)
+        ent.pack(side="left", fill="x", expand=True, padx=4)
+        self.search_var.trace_add("write", lambda *_: self._reload())
+        ttk.Checkbutton(top, text="Archiviate", variable=self.show_archived,
+                        command=self._reload).pack(side="left")
+
         self.tree = ttk.Treeview(frame, show="headings", height=14,
                                  columns=[c[0] for c in self.COLUMNS])
         for key, heading, width in self.COLUMNS:
             self.tree.heading(key, text=heading)
             self.tree.column(key, width=width, anchor="w")
-        for m in mail.all_mails():
-            self.tree.insert("", "end", iid=str(m["id"]),
-                             values=(m["received_at"], m["sender"], m["subject"],
-                                     "Inserita" if m["inserted"] else "Da gestire"))
-        self.tree.pack(fill="both", expand=True)
+        self.tree.pack(fill="both", expand=True, pady=(8, 0))
         self.tree.bind("<Double-1>", self._open)
-        ttk.Button(frame, text="Apri", command=self._open).pack(pady=(8, 0))
+
+        btns = ttk.Frame(frame)
+        btns.pack(fill="x", pady=(8, 0))
+        ttk.Button(btns, text="Apri", command=self._open).pack(side="left")
+        ttk.Button(btns, text="Archivia", command=self._archive).pack(
+            side="left", padx=4)
+        ttk.Button(btns, text="Elimina", command=self._delete).pack(side="left")
+
+    def _reload(self):
+        self.tree.delete(*self.tree.get_children())
+        for m in mail.search_mails(self.search_var.get(),
+                                   self.show_archived.get()):
+            received = m["received_at"][:16].replace("T", " ")
+            self.tree.insert("", "end", iid=str(m["id"]),
+                             values=(received, m["sender"], m["subject"],
+                                     mail.status(m)))
+
+    def _sel(self):
+        sel = self.tree.focus()
+        return int(sel) if sel else None
 
     def _open(self, _event=None):
-        sel = self.tree.focus()
-        if sel:
-            MailView(self, int(sel),
-                     on_change=lambda: (self.on_change(), self._build()))
+        mid = self._sel()
+        if mid is not None:
+            MailView(self, mid,
+                     on_change=lambda: (self.on_change(), self._reload()))
+
+    def _archive(self):
+        mid = self._sel()
+        if mid is not None:
+            mail.archive(mid)
+            self._reload()
+
+    def _delete(self):
+        mid = self._sel()
+        if mid is not None and messagebox.askyesno(
+                "Mail", "Eliminare definitivamente la mail?", parent=self):
+            mail.delete(mid)
+            self._reload()

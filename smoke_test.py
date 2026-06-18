@@ -677,6 +677,86 @@ clock.set_now(None)
 clock.running = False
 mail.config.enabled = False
 
+# --- sicurezza check-out: uscita d'ufficio dopo le 14:30, senza addebito -----
+debug_seed.clear_all()
+clock.set_now(datetime(today.year, today.month, today.day, 10, 0))
+rid_ov = reservations.create_reservation(
+    first_name="Over", last_name="Stay", room_number=110, checkin=d(-2),
+    checkout=today, adults=1, children=0, price_per_night=100, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_ov, {"first_name": "Over", "last_name": "Stay"})
+check("overstay: prima delle 14:30 nessuna uscita d'ufficio",
+      reservations.auto_checkout_overstayers(clock.now()) == 0)
+check("overstay: ancora in camera",
+      reservations.get(rid_ov)["status"] == "checked_in")
+clock.set_now(datetime(today.year, today.month, today.day, 14, 31))
+check("overstay: uscita d'ufficio dopo le 14:30",
+      reservations.auto_checkout_overstayers(clock.now()) == 1)
+check("overstay: ora checked_out",
+      reservations.get(rid_ov)["status"] == "checked_out")
+unpaid = [e for e in budget.entries() if e["note"] == "L'ospite non ha pagato."]
+check("overstay: a bilancio importo 0",
+      len(unpaid) == 1 and unpaid[0]["amount"] == 0)
+clock.set_now(None)
+
+# --- ospite arrabbiato al check-in (attesa > 1,5h) ---------------------------
+debug_seed.clear_all()
+clock.set_now(datetime(today.year, today.month, today.day, 16, 0))
+rid_ang = reservations.create_reservation(
+    first_name="Furio", last_name="Iroso", room_number=111, checkin=today,
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="furio@email.com", color="", comments="")
+reception._spawn_checkin(reservations.get(rid_ang), clock.now())
+check("anger: prima di 1,5h non scatta", reception.handle_anger(clock.now()) == 0)
+clock.set_now(datetime(today.year, today.month, today.day, 17, 31))
+check("anger: scatta dopo 1,5h", reception.handle_anger(clock.now()) == 1)
+check("anger: prenotazione annullata",
+      reservations.get(rid_ang)["status"] == "cancelled")
+check("anger: sparito dalla reception", not reception.pending())
+check("anger: mail di reclamo (spam)",
+      len([m for m in mail.all_mails() if m["kind"] == "spam"]) == 1)
+check("anger: finito in blacklist", database.get_conn().execute(
+    "SELECT COUNT(*) FROM blacklist WHERE last_name = 'Iroso'").fetchone()[0] == 1)
+clock.set_now(None)
+
+# --- stato/scadenza/rifiuto delle mail ---------------------------------------
+debug_seed.clear_all()
+clock.set_now(datetime(2026, 6, 1, 12, 0))
+mid = mail.spawn()
+check("mail nuova: Da gestire", mail.status(mail.get(mid)) == "Da gestire")
+mail.reject(mid)
+check("mail rifiutata: stato Rifiutata", mail.status(mail.get(mid)) == "Rifiutata")
+try:
+    mail.insert(mid)
+    blocked = False
+except reservations.ValidationError:
+    blocked = True
+check("mail rifiutata non inseribile", blocked)
+mid2 = mail.spawn()
+check("mail fresca non scaduta",
+      not mail.is_expired(mail.get(mid2), clock.now()))
+check("mail scaduta dopo 48h",
+      mail.is_expired(mail.get(mid2), clock.now() + timedelta(hours=49)))
+rid_sp = reservations.create_reservation(
+    first_name="Spa", last_name="Mmer", room_number=113, checkin=d(1),
+    checkout=d(3), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+check("mail spam: stato Spam", mail.status(
+    mail.get(mail.spawn_complaint(reservations.get(rid_sp)))) == "Spam")
+clock.set_now(None)
+
+# --- marcatore di arrivo solo prima del check-in -----------------------------
+debug_seed.clear_all()
+rid_arr = reservations.create_reservation(
+    first_name="Pre", last_name="Arrivo", room_number=112, checkin=today,
+    checkout=d(2), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+check("arrivo oggi: marcatore presente (booked)",
+      reservations.arrival_on(112, today) is not None)
+reservations.checkin_guest(rid_arr, {"first_name": "Pre", "last_name": "Arrivo"})
+check("dopo il check-in: marcatore sparito",
+      reservations.arrival_on(112, today) is None)
+
 print()
 if failures:
     print(f"{len(failures)} TEST FALLITI: {failures}")
