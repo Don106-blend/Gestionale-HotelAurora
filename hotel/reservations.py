@@ -190,9 +190,10 @@ def checkin_guest(res_id: int, guest: dict) -> None:
     conn = get_conn()
     guest_id = guests.upsert(guest)
     conn.execute(
-        "INSERT INTO reservation_guests (reservation_id, guest_id, is_child)"
-        " VALUES (?, ?, ?)",
-        (res_id, guest_id, int(guest.get("is_child", False))))
+        "INSERT INTO reservation_guests (reservation_id, guest_id, is_child,"
+        " checked_in_at) VALUES (?, ?, ?, ?)",
+        (res_id, guest_id, int(guest.get("is_child", False)),
+         clock.now().isoformat()))
     res = get(res_id)
     conn.execute("UPDATE reservations SET status = 'checked_in' WHERE id = ?"
                  " AND status = 'booked'", (res_id,))

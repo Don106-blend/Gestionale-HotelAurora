@@ -9,11 +9,12 @@ from hotel import clock, mail, persistence, reception
 from .booking_form import BookingForm
 from .budget_view import BudgetWindow
 from .debug_tool import DebugToolWindow
+from .guest_room import GuestRoomWindow
 from .mail_view import MailInbox, MailView
 from .reception_view import ReceptionWindow
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
-from .room_grid import RoomGrid
+from .room_grid import OccupancyGrid, RoomGrid
 from .time_view import TimeWindow
 from .timeline import Timeline
 
@@ -25,6 +26,7 @@ class HotelApp(tk.Tk):
         self.geometry("1120x760")
         self.room_dialog = None       # finestra camera unica e riutilizzata
         self.reception_window = None  # finestra reception unica
+        self.guest_window = None      # finestra ospiti unica
         self._alert_on = False
         persistence.load()       # ripristina lo stato di gioco salvato
         self._build()
@@ -72,8 +74,11 @@ class HotelApp(tk.Tk):
         notebook.pack(fill="both", expand=True)
         self.grid_page = RoomGrid(notebook, on_room_click=self._open_room)
         self.timeline_page = Timeline(notebook)
+        self.occupancy_page = OccupancyGrid(
+            notebook, on_room_click=self._open_guest_room)
         notebook.add(self.grid_page, text="Camere")
         notebook.add(self.timeline_page, text="Timeline")
+        notebook.add(self.occupancy_page, text="Occupazione")
 
         legend = ttk.Label(self, padding=4, justify="left", text=(
             "Legenda:  bianco = libera  |  verde/colore custom = occupata  |"
@@ -118,6 +123,7 @@ class HotelApp(tk.Tk):
     def refresh(self):
         self.grid_page.refresh()
         self.timeline_page.refresh()
+        self.occupancy_page.refresh()
 
     def _new_booking(self):
         BookingForm(self, on_done=self.refresh)
@@ -131,6 +137,12 @@ class HotelApp(tk.Tk):
 
     def _open_debug(self):
         DebugToolWindow(self, on_done=self.refresh)
+
+    def _open_guest_room(self, room_number):
+        if self.guest_window is not None and self.guest_window.winfo_exists():
+            self.guest_window.show(room_number)
+        else:
+            self.guest_window = GuestRoomWindow(self, room_number)
 
     def _reception_is_open(self):
         return (self.reception_window is not None

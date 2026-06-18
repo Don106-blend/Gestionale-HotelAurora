@@ -1,18 +1,28 @@
 """Gameplay reception: arrivi (check-in) e partenze (check-out) degli ospiti.
 
-Gli ospiti compaiono in reception a orari casuali (come le mail, sul time tick):
-gli arrivi solo di Pomeriggio/Sera, le partenze solo di Mattina, uno per tick.
-Il check-in e per-persona (tutti spawnano insieme); il check-out e per prenotazione.
+Ogni prenotazione ha un orario di arrivo/partenza casuale e deterministico
+(per (prenotazione, giorno)) dentro la sua finestra: gli arrivi distribuiti nel
+Pomeriggio/Sera, le partenze nella Mattina. Il check-in e per-persona (tutti
+spawnano insieme); il check-out e per prenotazione.
 """
 
 import random
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 from . import clock, names, reservations
 from .database import get_conn
 
 rng = random.Random()
-SPAWN_PROBABILITY = 0.15   # per tick (~1s) quando il turno e valido
+ARRIVAL_WINDOW = (15, 23)    # Pomeriggio + Sera
+DEPARTURE_WINDOW = (7, 12)   # Mattina
+
+
+def _scheduled_time(kind: str, reservation_id: int, day, window):
+    """Orario casuale ma stabile (per prenotazione/giorno) dentro la finestra."""
+    start, end = window
+    r = random.Random(f"{kind}:{reservation_id}:{day.isoformat()}")
+    minutes = r.randint(0, (end - start) * 60 - 1)
+    return datetime.combine(day, time(start)) + timedelta(minutes=minutes)
 
 
 def _due_arrivals(today: date):
@@ -56,21 +66,23 @@ def _spawn_checkout(res, when: datetime):
 
 
 def maybe_spawn():
-    """Genera arrivi/partenze in base al turno e a una probabilita casuale."""
+    """Fa comparire arrivi/partenze quando si raggiunge il loro orario schedulato."""
+    if clock.freq_factor() <= 0:   # in pausa: niente
+        return
     now = clock.now()
     shift = clock.shift(now)[0]
-    prob = SPAWN_PROBABILITY * clock.freq_factor()   # segue la velocita di gioco
-    if prob <= 0:
-        return
-    # al massimo un ospite per tick (trickle): mai tutti insieme
+    today = now.date()
     if shift in ("Pomeriggio", "Sera"):
-        due = _due_arrivals(now.date())
-        if due and rng.random() < prob:
-            _spawn_checkin(rng.choice(due), now)
+        for res in _due_arrivals(today):
+            if now >= _scheduled_time("arr", res["id"], today, ARRIVAL_WINDOW):
+                _spawn_checkin(res, now)
     elif shift == "Mattina":
-        due = _due_departures(now.date())
-        if due and rng.random() < prob:
-            _spawn_checkout(rng.choice(due), now)
+        from . import guest_state   # import differito: evita il ciclo
+        for res in _due_departures(today):
+            # niente check-out mentre un ospite della prenotazione e a un pasto
+            if (now >= _scheduled_time("dep", res["id"], today, DEPARTURE_WINDOW)
+                    and not guest_state.reservation_at_meal(res["id"], now)):
+                _spawn_checkout(res, now)
 
 
 def pending():
@@ -83,6 +95,13 @@ def pending():
 def get(entry_id: int):
     return get_conn().execute(
         "SELECT * FROM reception WHERE id = ?", (entry_id,)).fetchone()
+
+
+def has_checkout(reservation_id: int) -> bool:
+    """La prenotazione e in reception per il check-out (ospiti 'scesi')."""
+    return get_conn().execute(
+        "SELECT 1 FROM reception WHERE reservation_id = ? AND kind = 'checkout'"
+        " LIMIT 1", (reservation_id,)).fetchone() is not None
 
 
 def remove(entry_id: int):

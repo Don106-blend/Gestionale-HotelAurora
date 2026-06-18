@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS reservation_guests (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
     reservation_id  INTEGER NOT NULL REFERENCES reservations(id),
     guest_id        INTEGER NOT NULL REFERENCES guests(id),
-    is_child        INTEGER NOT NULL DEFAULT 0
+    is_child        INTEGER NOT NULL DEFAULT 0,
+    checked_in_at   TEXT
 );
 
 CREATE TABLE IF NOT EXISTS ledger (
@@ -108,9 +109,17 @@ def get_conn() -> sqlite3.Connection:
         _conn.row_factory = sqlite3.Row
         _conn.execute("PRAGMA foreign_keys = ON")
         _conn.executescript(_SCHEMA)
+        _migrate(_conn)
         _seed_rooms(_conn)
         _conn.commit()
     return _conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    # colonne aggiunte dopo: le inserisce nei DB esistenti (CREATE non basta)
+    cols = [r[1] for r in conn.execute("PRAGMA table_info(reservation_guests)")]
+    if "checked_in_at" not in cols:
+        conn.execute("ALTER TABLE reservation_guests ADD COLUMN checked_in_at TEXT")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:

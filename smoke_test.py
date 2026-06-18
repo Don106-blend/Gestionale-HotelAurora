@@ -6,7 +6,7 @@ import sys
 import tempfile
 import time as _time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -18,8 +18,8 @@ if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
 from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
-                   guests, mail, meals, persistence, reception, reservations,
-                   rooms)
+                   guest_state, guests, mail, meals, persistence, reception,
+                   reservations, rooms)
 
 failures = []
 
@@ -481,23 +481,26 @@ n_guests = database.get_conn().execute(
     (rid,)).fetchone()[0]
 check("reception: registrati tutti e 3 gli ospiti", n_guests == 3)
 
-# arrivi solo di Pomeriggio/Sera, mai Mattina/Pranzo/Notte; max uno per tick
+# arrivi distribuiti nella finestra 15-23, mai negli altri turni
 debug_seed.clear_all()
-for room in range(101, 106):
-    reservations.create_reservation(
-        first_name="A", last_name=str(room), room_number=room, checkin=today,
-        checkout=d(2), adults=1, children=0, price_per_night=50, board="RO",
-        discount=None, phone="", email="", color="", comments="")
-clock.speed = 5.0   # alza la probabilita per stressare il gate
+arr_ids = [reservations.create_reservation(
+    first_name="A", last_name=str(room), room_number=room, checkin=today,
+    checkout=d(2), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+    for room in range(101, 109)]
 for hour in (9, 13, 1):   # Mattina, Pranzo, Notte
     clock.set_now(datetime(today.year, today.month, today.day, hour))
-    for _ in range(30):
+    for _ in range(20):
         reception.maybe_spawn()
 check("reception: nessun arrivo fuori da Pomeriggio/Sera", not reception.pending())
-clock.set_now(datetime(today.year, today.month, today.day, 16))  # Pomeriggio
-reception.maybe_spawn()
-check("reception: al massimo un arrivo per tick", len(reception.pending()) <= 1)
-clock.speed = 1.0
+hours = [reception._scheduled_time("arr", rid, today,
+                                   reception.ARRIVAL_WINDOW).hour for rid in arr_ids]
+check("orari di arrivo dentro 15-23", all(15 <= h < 23 for h in hours))
+check("orari di arrivo distribuiti (non tutti uguali)", len(set(hours)) >= 2)
+clock.set_now(datetime(today.year, today.month, today.day, 22, 59))
+for _ in range(3):
+    reception.maybe_spawn()
+check("entro fine sera arrivano tutti", len(reception.pending()) == len(arr_ids))
 clock.set_now(None)
 
 # partenze: dovute solo per checked_in con check-out oggi
@@ -512,6 +515,139 @@ check("reception: partenza dovuta trovata",
 reception._spawn_checkout(reservations.get(rid3), morning)
 check("reception: spawn check-out una sola riga",
       len(reception.pending()) == 1 and reception.pending()[0]["kind"] == "checkout")
+
+# --- genoma / stato dinamico degli ospiti ------------------------------------
+check("genoma stabile per guest_id",
+      guest_state.metadata(42) == guest_state.metadata(42))
+g42 = guest_state.metadata(42)
+check("ora di sonno nel turno notturno (offset 60-540 da 22:00)",
+      60 <= g42["sleep_offset"] <= 540)
+check("durata sonno 4-9 ore", 4 <= g42["wake_hours"] <= 9)
+
+onset, wake = guest_state.sleep_window(7, date(2026, 1, 1))
+mid = onset + (wake - onset) / 2
+check("addormentato dentro la finestra di sonno",
+      guest_state.stato(7, mid) == "Addormentato")
+check("sveglio fuori dalla finestra",
+      guest_state.stato(7, wake + timedelta(hours=3)) == "Sveglio")
+check("addormentato -> locazione Letto",
+      guest_state.locazione("Addormentato", 7, mid) == "Letto")
+check("sveglio -> locazione dalla libreria",
+      guest_state.locazione("Sveglio", 7, onset) in guest_state.LOCATIONS)
+
+# stato Assente
+debug_seed.clear_all()
+afternoon = datetime(today.year, today.month, today.day, 14, 0)
+
+# appena arrivato (entro settle_minutes) -> Assente / locazione esterna
+settle = guest_state.settle_minutes(9999)
+check("settle 1-30 min", 1 <= settle <= 30)
+row = {"id": 1000, "first_name": "Tan", "last_name": "Tan", "board": "RO",
+       "reservation_id": 8888, "rg_id": 9999, "checked_in_at": afternoon.isoformat()}
+d0 = guest_state.describe(row, afternoon)
+check("appena arrivato -> Assente", d0["stato"] == "Assente")
+check("Assente -> colore grigio", d0["color"] == guest_state.COLORS["Assente"])
+check("Assente -> locazione esterna",
+      d0["locazione"] in guest_state.EXTERNAL_LOCATIONS)
+
+# in reception per il check-out -> Assente / Reception
+rid_a = reservations.create_reservation(
+    first_name="Out", last_name="Going", room_number=104, checkin=d(-1),
+    checkout=today, adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_a, {"first_name": "Out", "last_name": "Going"})
+reception._spawn_checkout(reservations.get(rid_a),
+                          datetime(today.year, today.month, today.day, 8))
+grow = guests.for_reservation(rid_a)[0]
+d_rec = guest_state.describe(grow, datetime(today.year, today.month, today.day, 8, 30))
+check("in reception check-out -> Assente",
+      d_rec["stato"] == "Assente" and d_rec["locazione"] == "Reception")
+
+# uscita di giorno -> Assente / esterna (cerca un ospite con un'uscita)
+found = False
+for gid in range(1, 300):
+    for hh in range(9, 20):
+        t = datetime(2026, 6, 1, hh, 30)
+        if guest_state._on_outing(gid, t) and not guest_state._is_asleep(gid, t):
+            orow = {"id": gid, "first_name": "P", "last_name": "Q", "board": "RO",
+                    "reservation_id": 77777, "rg_id": 77777,
+                    "checked_in_at": (t - timedelta(hours=5)).isoformat()}
+            dd = guest_state.describe(orow, t)
+            check("uscita di giorno -> Assente/esterna",
+                  dd["stato"] == "Assente"
+                  and dd["locazione"] in guest_state.EXTERNAL_LOCATIONS)
+            found = True
+            break
+    if found:
+        break
+check("almeno un'uscita generata tra gli ospiti", found)
+
+# --- pasti per board (assenza in sala) ---------------------------------------
+check("BB -> solo colazione",
+      guest_state.BOARD_MEALS["BB"] == ("Colazione",))
+check("HB -> colazione e cena",
+      set(guest_state.BOARD_MEALS["HB"]) == {"Colazione", "Cena"})
+check("FB -> tre pasti",
+      set(guest_state.BOARD_MEALS["FB"]) == {"Colazione", "Pranzo", "Cena"})
+check("RO/RES -> nessun pasto",
+      guest_state.BOARD_MEALS["RO"] == () and guest_state.BOARD_MEALS["RES"] == ())
+
+check("pasto corrente: colazione alle 7",
+      guest_state.current_meal(datetime(2026, 1, 1, 7)) == "Colazione")
+check("pasto corrente: pranzo alle 13",
+      guest_state.current_meal(datetime(2026, 1, 1, 13)) == "Pranzo")
+check("pasto corrente: cena alle 20",
+      guest_state.current_meal(datetime(2026, 1, 1, 20)) == "Cena")
+check("nessun pasto alle 16",
+      guest_state.current_meal(datetime(2026, 1, 1, 16)) is None)
+
+s_c, e_c = guest_state._meal_slot(123, date(2026, 1, 1), "Colazione")
+check("colazione dentro la finestra 6-10",
+      time(6) <= s_c.time() and e_c.time() <= time(10, 0, 1))
+check("attivita pasto dura 1h", e_c - s_c == timedelta(hours=1))
+check("colazione fatta dopo lo slot",
+      guest_state.has_done_meal(123, "BB", "Colazione", e_c + timedelta(minutes=1)))
+check("colazione non fatta prima",
+      not guest_state.has_done_meal(123, "BB", "Colazione",
+                                    s_c - timedelta(minutes=1)))
+check("reset il giorno dopo",
+      not guest_state.has_done_meal(123, "BB", "Colazione",
+                                    datetime(2026, 1, 2, 5)))
+
+# un ospite (sveglio) a colazione -> Assente / Sala colazione
+eat_gid = None
+for gid in range(1, 500):
+    s, _e = guest_state._meal_slot(gid, date(2026, 6, 1), "Colazione")
+    t = s + timedelta(minutes=20)
+    if not guest_state._is_asleep(gid, t):
+        eat_gid, eat_t = gid, t
+        break
+check("BB a colazione -> is_eating",
+      guest_state.is_eating(eat_gid, "BB", "Colazione", eat_t))
+check("RO a colazione -> niente",
+      not guest_state.is_eating(eat_gid, "RO", "Colazione", eat_t))
+meal_row = {"id": eat_gid, "first_name": "A", "last_name": "B",
+            "reservation_id": 0, "rg_id": 0, "board": "BB",
+            "checked_in_at": (eat_t - timedelta(hours=3)).isoformat()}
+dm = guest_state.describe(meal_row, eat_t)
+check("a colazione -> Assente / Sala colazione",
+      dm["stato"] == "Assente" and dm["locazione"] == "Sala colazione")
+
+# check-out bloccato mentre un ospite e a un pasto
+debug_seed.clear_all()
+rid_bb = reservations.create_reservation(
+    first_name="Bee", last_name="Bee", room_number=105, checkin=d(-1),
+    checkout=today, adults=1, children=0, price_per_night=50, board="BB",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_bb, {"first_name": "Bee", "last_name": "Bee"})
+gid_bb = guests.for_reservation(rid_bb)[0]["id"]
+s_bb, e_bb = guest_state._meal_slot(gid_bb, today, "Colazione")
+t_bb = s_bb + timedelta(minutes=5)
+if not guest_state._is_asleep(gid_bb, t_bb):
+    check("a colazione -> reservation_at_meal True",
+          guest_state.reservation_at_meal(rid_bb, t_bb))
+check("fuori pasto -> reservation_at_meal False",
+      not guest_state.reservation_at_meal(rid_bb, e_bb + timedelta(hours=2)))
 
 # --- persistenza stato di gioco ----------------------------------------------
 clock.set_now(datetime(2026, 3, 1, 8, 30))

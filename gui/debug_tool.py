@@ -7,6 +7,8 @@ from tkinter import messagebox, ttk
 from hotel import budget, clock, constants, debug_seed, mail
 
 from .date_picker import choose_into
+from .dining_room import DiningRoomWindow
+from .guest_room import GuestMetadataWindow
 from .utils import format_date_it, parse_date_it
 
 
@@ -79,8 +81,18 @@ class DebugToolWindow(tk.Toplevel):
         self._build_generate()
         self._build_budget()
         self._build_mail()
+        self._build_guests()
         ttk.Button(self.outer, text="Chiudi",
                    command=self.destroy).pack(pady=(8, 0))
+
+    def _build_guests(self):
+        b = self._section("Ospiti")
+        ttk.Button(b, text="Vedi metadati ospiti",
+                   command=lambda: GuestMetadataWindow(self)).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+        ttk.Button(b, text="Sala Pranzo",
+                   command=lambda: DiningRoomWindow(self)).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w", pady=(2, 0))
 
     def _build_time(self):
         b = self._section("Tempo simulato", expanded=True)
