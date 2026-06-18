@@ -2,7 +2,7 @@
 
 import tkinter as tk
 from datetime import date, timedelta
-from tkinter import ttk
+from tkinter import messagebox, ttk
 
 from hotel import clock, constants, reservations, rooms
 
@@ -22,8 +22,11 @@ STATUS_COLORS = {
 class Timeline(ttk.Frame):
     """Canvas scrollabile: una riga per camera, una colonna per giorno."""
 
-    def __init__(self, master):
+    def __init__(self, master, on_change=None):
         super().__init__(master)
+        self.on_change = on_change or (lambda: None)
+        self._drag = None
+        self._rooms = []
         width = LABEL_W + (DAYS_BEFORE + DAYS_AFTER + 1) * DAY_W
         self.canvas = tk.Canvas(self, width=min(width, 1100), height=640,
                                 background="white", highlightthickness=0)
@@ -36,6 +39,9 @@ class Timeline(ttk.Frame):
         hscroll.pack(side="bottom", fill="x")
         self.canvas.pack(side="left", fill="both", expand=True)
         vscroll.pack(side="right", fill="y")
+        # drag&drop: sposta la prenotazione su un'altra camera (stesse date)
+        self.canvas.bind("<B1-Motion>", self._on_motion)
+        self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.refresh()
 
     def refresh(self):
@@ -45,6 +51,7 @@ class Timeline(ttk.Frame):
         end = today + timedelta(days=DAYS_AFTER)
         n_days = (end - start).days + 1
         all_rooms = rooms.all_rooms()
+        self._rooms = all_rooms
         total_h = HEADER_H + len(all_rooms) * ROW_H
         total_w = LABEL_W + n_days * DAY_W
 
@@ -81,11 +88,48 @@ class Timeline(ttk.Frame):
             x2 = LABEL_W + min((checkout - start).days, n_days) * DAY_W - 2
             color = (res["color"] or
                      STATUS_COLORS.get(res["status"], "#cccccc"))
+            tag = f"bar{res['id']}"
             self.canvas.create_rectangle(x1, y + 3, x2, y + ROW_H - 3,
-                                         fill=color, outline="#666666")
+                                         fill=color, outline="#666666", tags=tag)
             name = reservations.guest_display_name(res)
             self.canvas.create_text(x1 + 4, y + ROW_H / 2, anchor="w",
-                                    text=name[:14],
+                                    text=name[:14], tags=tag,
                                     font=("TkDefaultFont", 7))
+            # solo le prenotazioni non ancora in check-in sono trascinabili
+            if res["status"] == "booked":
+                self.canvas.tag_bind(
+                    tag, "<Button-1>",
+                    lambda _e, rid=res["id"]: self._start_drag(rid))
 
         self.canvas.configure(scrollregion=(0, 0, total_w, total_h))
+
+    def _start_drag(self, res_id):
+        self._drag = {"tag": f"bar{res_id}", "res_id": res_id,
+                      "last_y": None, "moved": 0}
+        self.canvas.tag_raise(self._drag["tag"])
+
+    def _on_motion(self, event):
+        if not self._drag:
+            return
+        y = self.canvas.canvasy(event.y)
+        if self._drag["last_y"] is not None:
+            dy = y - self._drag["last_y"]
+            self.canvas.move(self._drag["tag"], 0, dy)
+            self._drag["moved"] += abs(dy)
+        self._drag["last_y"] = y
+
+    def _on_release(self, event):
+        drag = self._drag
+        self._drag = None
+        if drag is None or drag["moved"] < 4:   # semplice click, non drag
+            return
+        y = self.canvas.canvasy(event.y)
+        idx = int((y - HEADER_H) // ROW_H)
+        if 0 <= idx < len(self._rooms):
+            try:
+                reservations.change_room(drag["res_id"],
+                                         self._rooms[idx]["number"])
+                self.on_change()
+            except reservations.ValidationError as exc:
+                messagebox.showerror("Sposta prenotazione", str(exc), parent=self)
+        self.refresh()   # riallinea la barra (spostata o tornata al posto)

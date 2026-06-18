@@ -1,5 +1,6 @@
 """Connessione SQLite, schema e popolamento iniziale delle camere."""
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -91,6 +92,13 @@ CREATE TABLE IF NOT EXISTS blacklist (
     last_name  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS meals_served (
+    guest_id INTEGER NOT NULL,
+    day      TEXT NOT NULL,
+    meal     TEXT NOT NULL,
+    PRIMARY KEY (guest_id, day, meal)
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -123,6 +131,20 @@ def get_conn() -> sqlite3.Connection:
     return _conn
 
 
+def kv_get(key: str, default=None):
+    """Legge un valore JSON dalla tabella settings (KV di gioco)."""
+    row = get_conn().execute(
+        "SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return json.loads(row["value"]) if row else default
+
+
+def kv_set(key: str, value) -> None:
+    conn = get_conn()
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+                 (key, json.dumps(value)))
+    conn.commit()
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
     # colonne aggiunte dopo: le inserisce nei DB esistenti (CREATE non basta)
     cols = [r[1] for r in conn.execute("PRAGMA table_info(reservation_guests)")]
@@ -139,14 +161,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def _seed_rooms(conn: sqlite3.Connection) -> None:
     if conn.execute("SELECT COUNT(*) FROM rooms").fetchone()[0] > 0:
         return
-    for floor in constants.FLOORS:
-        for n in range(1, constants.ROOMS_PER_FLOOR + 1):
-            is_suite = n in constants.SUITE_NUMBERS
-            max_adults = (constants.SUITE_MAX_ADULTS if is_suite
-                          else constants.STD_MAX_ADULTS)
-            conn.execute(
-                "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (floor * 100 + n, floor, int(is_suite), max_adults,
-                 constants.MAX_CHILDREN),
-            )
+    # hotel scalabile: si parte con poche camere al piano 1 (le ultime suite)
+    for n in range(1, constants.INITIAL_ROOMS + 1):
+        is_suite = n > constants.INITIAL_ROOMS - constants.INITIAL_SUITES
+        max_adults = (constants.SUITE_MAX_ADULTS if is_suite
+                      else constants.STD_MAX_ADULTS)
+        conn.execute(
+            "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (100 + n, 1, int(is_suite), max_adults, constants.MAX_CHILDREN))

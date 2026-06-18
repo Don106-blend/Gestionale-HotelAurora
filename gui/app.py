@@ -4,17 +4,19 @@ import random
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import clock, mail, persistence, reception, reservations
+from hotel import clock, estate, mail, persistence, reception, reservations
 
 from .booking_form import BookingForm
+from .browser import BrowserPage
 from .budget_view import BudgetWindow
 from .debug_tool import DebugToolWindow
 from .guest_room import GuestRoomWindow
-from .mail_view import MailInbox, MailView
+from .mail_view import MailView
 from .reception_view import ReceptionWindow
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
 from .room_grid import OccupancyGrid, RoomGrid
+from .setup_dialog import SetupDialog
 from .time_view import TimeWindow
 from .timeline import Timeline
 
@@ -22,13 +24,17 @@ from .timeline import Timeline
 class HotelApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("HotelAurora")
-        self.geometry("1120x760")
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1120, sw - 80)}x{min(760, sh - 80)}")
+        self.minsize(820, 560)
         self.room_dialog = None       # finestra camera unica e riutilizzata
         self.reception_window = None  # finestra reception unica
         self.guest_window = None      # finestra ospiti unica
         self._alert_on = False
         persistence.load()       # ripristina lo stato di gioco salvato
+        if not estate.is_setup_done():        # primo avvio: configura l'hotel
+            self.wait_window(SetupDialog(self))
+        self.title(f"{estate.hotel_name()} - HotelAurora")
         self._build()
         self._last_shown_day = clock.today()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -66,29 +72,9 @@ class HotelApp(tk.Tk):
                    command=lambda: BudgetWindow(self)).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Reception",
                    command=self._open_reception).pack(side="right", padx=2)
-        ttk.Button(toolbar, text="Mail",
-                   command=lambda: MailInbox(self, on_change=self.refresh)
-                   ).pack(side="right", padx=2)
 
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill="both", expand=True)
-        self.grid_page = RoomGrid(notebook, on_room_click=self._open_room)
-        self.timeline_page = Timeline(notebook)
-        self.occupancy_page = OccupancyGrid(
-            notebook, on_room_click=self._open_guest_room)
-        notebook.add(self.grid_page, text="Camere")
-        notebook.add(self.timeline_page, text="Timeline")
-        notebook.add(self.occupancy_page, text="Occupazione")
-
-        legend = ttk.Label(self, padding=4, justify="left", text=(
-            "Legenda:  bianco = libera  |  verde/colore custom = occupata  |"
-            "  striscia gialla a destra = check-out oggi  |"
-            "  quadrato fucsia (alto dx) = arrivo oggi  |"
-            "  quadrato blu (basso dx) = arrivo domani\n"
-            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite"))
-        legend.pack(fill="x")
-
-        # barra del tempo simulato (clic = finestra Orario)
+        # barra e legenda PRIMA del notebook: pack expand=True consuma tutto
+        # lo spazio rimanente e chi viene dopo non riceve pixel.
         bar = ttk.Frame(self, padding=4)
         bar.pack(fill="x", side="bottom")
         ttk.Label(bar, text="Tempo:").pack(side="left")
@@ -100,7 +86,6 @@ class HotelApp(tk.Tk):
         for w in (self.clock_label, self.shift_label):
             w.bind("<Button-1>", lambda _e: TimeWindow(self))
 
-        # controllo velocita in basso a destra
         speed_bar = ttk.Frame(bar)
         speed_bar.pack(side="right")
         controls = (
@@ -117,6 +102,26 @@ class HotelApp(tk.Tk):
             btn.pack(side="left", padx=1)
             self._speed_btns[label] = btn
         self._sync_speed_buttons()
+
+        legend = ttk.Label(self, padding=4, justify="left", text=(
+            "Legenda:  bianco = libera  |  verde/colore custom = occupata  |"
+            "  striscia gialla a destra = check-out oggi  |"
+            "  quadrato fucsia (alto dx) = arrivo oggi  |"
+            "  quadrato blu (basso dx) = arrivo domani\n"
+            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite"))
+        legend.pack(fill="x", side="bottom")
+
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill="both", expand=True)
+        self.grid_page = RoomGrid(notebook, on_room_click=self._open_room)
+        self.timeline_page = Timeline(notebook, on_change=self.refresh)
+        self.occupancy_page = OccupancyGrid(
+            notebook, on_room_click=self._open_guest_room)
+        self.browser_page = BrowserPage(notebook, self)
+        notebook.add(self.grid_page, text="Camere")
+        notebook.add(self.timeline_page, text="Timeline")
+        notebook.add(self.occupancy_page, text="Occupazione")
+        notebook.add(self.browser_page, text="Browser")
 
         self._update_time_display()
 
@@ -186,7 +191,7 @@ class HotelApp(tk.Tk):
         # rate/sec = (probabilita per intervallo) * velocita di gioco
         cfg = mail.config
         factor = clock.freq_factor()
-        if cfg.enabled and factor > 0:
+        if cfg.enabled and not cfg.block_new_bookings and factor > 0:
             # la probabilita dipende dal turno (notte rarissima, pranzo/sera rare)
             rate = mail.shift_probability() / max(cfg.interval_seconds, 1) * factor
             if random.random() < min(rate, 1.0):
@@ -225,6 +230,7 @@ class HotelApp(tk.Tk):
             now = clock.now()
             reception.maybe_spawn()   # arrivi/partenze in base al turno
             changed = reception.handle_anger(now)         # ospiti spazientiti
+            changed += reception.serve_meals(now)         # consumo cibo / reclami
             changed += reservations.auto_checkout_overstayers(now)  # uscite d'ufficio
             if changed:
                 self.refresh()

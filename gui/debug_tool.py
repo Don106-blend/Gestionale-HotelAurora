@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import timedelta
 from tkinter import messagebox, ttk
 
-from hotel import budget, clock, constants, debug_seed, mail
+from hotel import budget, clock, constants, debug_seed, estate, mail
 
 from .date_picker import choose_into
 from .dining_room import DiningRoomWindow
@@ -82,8 +82,43 @@ class DebugToolWindow(tk.Toplevel):
         self._build_budget()
         self._build_mail()
         self._build_guests()
+        self._build_food()
+        self._build_system()
         ttk.Button(self.outer, text="Chiudi",
                    command=self.destroy).pack(pady=(8, 0))
+
+    def _build_system(self):
+        b = self._section("Sistema")
+        ttk.Button(b, text="Reset totale e riavvio",
+                   command=self._reset_all).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+
+    def _reset_all(self):
+        if messagebox.askyesno(
+                "Reset totale",
+                "Cancellare TUTTO e tornare al primo avvio?\n"
+                "Il gestionale si chiudera.", parent=self):
+            estate.reset_all()
+            self.master.destroy()   # chiude senza salvare lo stato
+
+    def _build_food(self):
+        b = self._section("Cibo")
+        self._field(b, "Unita di cibo possedute", "food", estate.food(), width=8)
+        ttk.Label(b, text=f"(capienza max: {estate.food_cap()})").grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w")
+        ttk.Button(b, text="Applica", command=self._apply_food).grid(
+            row=self._next(b), column=0, columnspan=2, sticky="w", pady=(2, 0))
+
+    def _apply_food(self):
+        try:
+            n = int(self.vars["food"].get())
+        except ValueError:
+            messagebox.showerror("Errore", "Quantita non valida.", parent=self)
+            return
+        estate.set_food(n)
+        self.on_done()
+        messagebox.showinfo("Debug", f"Cibo impostato a {estate.food()} unita"
+                                     f" (max {estate.food_cap()}).", parent=self)
 
     def _build_guests(self):
         b = self._section("Ospiti")

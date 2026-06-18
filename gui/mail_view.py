@@ -106,6 +106,7 @@ class MailInbox(tk.Toplevel):
                         command=self._reload).pack(side="left")
 
         self.tree = ttk.Treeview(frame, show="headings", height=14,
+                                 selectmode="extended",
                                  columns=[c[0] for c in self.COLUMNS])
         for key, heading, width in self.COLUMNS:
             self.tree.heading(key, text=heading)
@@ -129,25 +130,24 @@ class MailInbox(tk.Toplevel):
                              values=(received, m["sender"], m["subject"],
                                      mail.status(m)))
 
-    def _sel(self):
-        sel = self.tree.focus()
-        return int(sel) if sel else None
+    def _selected(self):
+        return [int(i) for i in self.tree.selection()]
 
     def _open(self, _event=None):
-        mid = self._sel()
-        if mid is not None:
-            MailView(self, mid,
+        sel = self.tree.focus() or (self.tree.selection() or [None])[0]
+        if sel:
+            MailView(self, int(sel),
                      on_change=lambda: (self.on_change(), self._reload()))
 
     def _archive(self):
-        mid = self._sel()
-        if mid is not None:
+        for mid in self._selected():
             mail.archive(mid)
-            self._reload()
+        self._reload()
 
     def _delete(self):
-        mid = self._sel()
-        if mid is not None and messagebox.askyesno(
-                "Mail", "Eliminare definitivamente la mail?", parent=self):
-            mail.delete(mid)
+        ids = self._selected()
+        if ids and messagebox.askyesno(
+                "Mail", f"Eliminare {len(ids)} mail?", parent=self):
+            for mid in ids:
+                mail.delete(mid)
             self._reload()

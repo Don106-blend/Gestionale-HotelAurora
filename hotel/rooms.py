@@ -7,6 +7,12 @@ def all_rooms():
     return get_conn().execute("SELECT * FROM rooms ORDER BY number").fetchall()
 
 
+def floors() -> list:
+    """Piani posseduti (anche se ancora senza camere), in ordine."""
+    from . import estate   # import differito: estate usa il bilancio
+    return sorted(estate.owned_floors())
+
+
 def get_room(number: int):
     return get_conn().execute(
         "SELECT * FROM rooms WHERE number = ?", (number,)).fetchone()

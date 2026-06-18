@@ -149,6 +149,11 @@ def _on_outing(guest_id: int, now: datetime) -> bool:
 
 # Motivi di assenza in ordine di priorita; ognuno -> locazione oppure None.
 # Per aggiungere assenze future (dai metadati) basta aggiungere una funzione.
+def _absent_food(row, now):
+    return ("Reception" if reception.has_food_complaint(
+        row["reservation_id"], row["first_name"], row["last_name"]) else None)
+
+
 def _absent_reception(row, now):
     return "Reception" if reception.has_checkout(row["reservation_id"]) else None
 
@@ -218,8 +223,8 @@ def _absent_meal(row, now):
     return _meal_now(row["id"], row["board"], now)
 
 
-ABSENCE_CHECKS = (_absent_reception, _absent_settling, _absent_meal,
-                  _absent_outing)
+ABSENCE_CHECKS = (_absent_food, _absent_reception, _absent_settling,
+                  _absent_meal, _absent_outing)
 
 
 def absence_location(row, now: datetime):

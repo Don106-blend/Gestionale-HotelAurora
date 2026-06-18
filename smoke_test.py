@@ -30,21 +30,41 @@ def check(name, condition):
         failures.append(name)
 
 
+def _raises(fn):
+    try:
+        fn()
+        return False
+    except Exception:
+        return True
+
+
 today = date.today()
 d = lambda n: today + timedelta(days=n)
 
-# --- camere ---------------------------------------------------------------
+# --- camere (hotel scalabile: 10 all'avvio, 2 suite) ----------------------
 all_rooms = rooms.all_rooms()
-check("81 camere create", len(all_rooms) == 81)
-check("numerazione 101..327", all_rooms[0]["number"] == 101
-      and all_rooms[-1]["number"] == 327)
-suites = [r["number"] for r in all_rooms if r["is_suite"]]
-check("suite = 23-27 di ogni piano",
-      suites == [123, 124, 125, 126, 127, 223, 224, 225, 226, 227,
-                 323, 324, 325, 326, 327])
+check("10 camere iniziali", len(all_rooms) == 10)
+check("numerazione 101..110",
+      [r["number"] for r in all_rooms] == list(range(101, 111)))
+check("2 suite all'avvio (109, 110)",
+      [r["number"] for r in all_rooms if r["is_suite"]] == [109, 110])
 check("capienza standard 2+1", rooms.get_room(101)["max_adults"] == 2
       and rooms.get_room(101)["max_children"] == 1)
-check("capienza suite 4+1", rooms.get_room(123)["max_adults"] == 4)
+check("capienza suite 4+1", rooms.get_room(110)["max_adults"] == 4)
+
+# il resto dei test usa molte camere: ricreo un layout ampio (piani 1-3, 27/piano)
+_conn = database.get_conn()
+_conn.execute("DELETE FROM rooms")
+for _fl in (1, 2, 3):
+    for _n in range(1, 28):
+        _suite = _n >= 23
+        _conn.execute(
+            "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (_fl * 100 + _n, _fl, int(_suite), 4 if _suite else 2, 1))
+database.kv_set("floors", [1, 2, 3])
+_conn.commit()
+check("layout ampio per i test: 81 camere", len(rooms.all_rooms()) == 81)
 
 # --- prenotazioni e validazioni --------------------------------------------
 res_id = reservations.create_reservation(
@@ -756,6 +776,157 @@ check("arrivo oggi: marcatore presente (booked)",
 reservations.checkin_guest(rid_arr, {"first_name": "Pre", "last_name": "Arrivo"})
 check("dopo il check-in: marcatore sparito",
       reservations.arrival_on(112, today) is None)
+
+# --- spostamento camera (drag&drop timeline) ---------------------------------
+debug_seed.clear_all()
+rid_mv = reservations.create_reservation(
+    first_name="Spo", last_name="Sta", room_number=101, checkin=d(1),
+    checkout=d(3), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.change_room(rid_mv, 102)
+moved = reservations.get(rid_mv)
+check("change_room: camera aggiornata", moved["room_number"] == 102)
+check("change_room: date invariate",
+      moved["checkin_date"] == d(1).isoformat()
+      and moved["checkout_date"] == d(3).isoformat())
+# camera occupata nello stesso periodo -> rifiuto
+reservations.create_reservation(
+    first_name="Occ", last_name="Upa", room_number=103, checkin=d(1),
+    checkout=d(3), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+check("change_room: camera occupata rifiutata",
+      _raises(lambda: reservations.change_room(rid_mv, 103)))
+# una prenotazione gia in check-in non si sposta
+reservations.checkin_guest(rid_mv, {"first_name": "Spo", "last_name": "Sta"})
+check("change_room: checked_in non spostabile",
+      _raises(lambda: reservations.change_room(rid_mv, 104)))
+check("blocco prenotazioni: flag presente",
+      hasattr(mail.config, "block_new_bookings"))
+
+# --- patrimonio: setup, piani e acquisto camere ------------------------------
+from hotel import estate
+estate.reset_all()                       # azzera tutto -> primo avvio
+database._seed_rooms(database.get_conn())  # riseed delle 5 camere iniziali
+database.get_conn().commit()
+
+check("estate: setup non fatto all'inizio", not estate.is_setup_done())
+estate.complete_setup("Mario", "Grand Hotel")
+check("estate: setup completato", estate.is_setup_done())
+check("estate: nomi salvati",
+      estate.user_name() == "Mario" and estate.hotel_name() == "Grand Hotel")
+
+check("estate: 10 camere iniziali", len(rooms.all_rooms()) == 10)
+check("estate: due suite all'avvio",
+      sum(r["is_suite"] for r in rooms.all_rooms()) == 2)
+check("estate: un solo piano (1)", estate.owned_floors() == [1])
+check("estate: costo prima camera 1000", estate.room_cost() == 1000)
+check("estate: suite costa il doppio", estate.room_cost(suite=True) == 2000)
+# il costo NON deve dipendere dalle camere preesistenti (bug 23 miliardi)
+for _n in range(201, 241):
+    database.get_conn().execute(
+        "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+        " VALUES (?, 2, 0, 2, 1)", (_n,))
+database.get_conn().commit()
+check("estate: costo indipendente dalle camere nel DB",
+      estate.room_cost() == 1000)
+database.get_conn().execute("DELETE FROM rooms WHERE number > 110")
+database.get_conn().commit()
+# incremento +250, poi +500 dopo 10 acquisti
+database.kv_set("rooms_purchased", 10)
+check("estate: a 10 acquisti costo 3500", estate.room_cost() == 3500)
+database.kv_set("rooms_purchased", 12)
+check("estate: oltre soglia incremento +500", estate.room_cost() == 4500)
+database.kv_set("rooms_purchased", 0)
+
+try:
+    estate.buy_room(1)            # budget a 0: niente acquisto
+    bought = True
+except estate.EstateError:
+    bought = False
+check("estate: senza saldo non si compra", not bought)
+
+budget.record(budget.INCOME, "Test", 100000)   # bilancio per gli acquisti
+n11 = estate.buy_room(1)
+check("estate: camera 111 creata sul piano 1",
+      n11 == 111 and rooms.get_room(111) is not None)
+check("estate: costo sale di 250 dopo l'acquisto", estate.room_cost() == 1250)
+ns = estate.buy_room(1, suite=True)
+check("estate: suite acquistata", rooms.get_room(ns)["is_suite"] == 1)
+
+f2 = estate.buy_floor()
+check("estate: nuovo piano 2", f2 == 2 and 2 in estate.owned_floors())
+n201 = estate.buy_room(2)
+check("estate: prima camera del piano 2 = 201", n201 == 201)
+check("estate: comprare su piano non posseduto fallisce",
+      _raises(lambda: estate.buy_room(9)))
+check("estate: saldo diminuito dagli acquisti",
+      budget.totals()["balance"] < 100000)
+
+# --- dispensa cibo (AllFoods!) -----------------------------------------------
+check("cibo: 50 unita al primo avvio", estate.food() == 50)
+check("cibo: capienza 100 al primo avvio", estate.food_cap() == 100)
+budget.record(budget.INCOME, "TestFood", 10000)   # saldo per gli acquisti
+estate.set_food(0)
+estate.buy_food(10)
+check("cibo: buy_food aggiunge unita", estate.food() == 10)
+check("cibo: buy_food oltre la capienza fallisce",
+      _raises(lambda: estate.buy_food(1000)))
+check("cibo: quantita non valida fallisce",
+      _raises(lambda: estate.buy_food(0)))
+estate.set_food(2)
+check("cibo: consume_food scala le unita",
+      estate.consume_food(1) and estate.food() == 1)
+check("cibo: consume_food senza scorte non scala",
+      not estate.consume_food(5) and estate.food() == 1)
+check("cibo: costo potenziamento 2000", estate.food_cap_upgrade_cost() == 2000)
+estate.upgrade_food_cap()
+check("cibo: potenziamento +50 capienza", estate.food_cap() == 150)
+check("cibo: costo potenziamento sale di 0,5x",
+      estate.food_cap_upgrade_cost() == 3000)
+
+# consumo pasti: ogni ospite che mangia scala 1 unita; senza cibo -> reclamo
+debug_seed.clear_all()
+rid_food = reservations.create_reservation(
+    first_name="Fame", last_name="Affamato", room_number=105, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="BB",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_food, {"first_name": "Fame", "last_name": "Affamato"})
+gfood = guests.for_reservation(rid_food)[0]["id"]
+t_f = None
+for off in range(0, 60):
+    day0 = date(2026, 6, 2) + timedelta(days=off)
+    s_f, _e = guest_state._meal_slot(gfood, day0, "Colazione")
+    cand = s_f + timedelta(minutes=10)
+    if guest_state.is_eating(gfood, "BB", "Colazione", cand):
+        t_f = cand
+        break
+check("trovato uno slot colazione valido", t_f is not None)
+estate.set_food(0)
+check("pasti: senza cibo genera 1 reclamo", reception.serve_meals(t_f) == 1)
+check("pasti: reclamo in reception (kind food)",
+      any(e["kind"] == "food" for e in reception.pending()))
+check("pasti: lo stesso pasto si conta una sola volta",
+      reception.serve_meals(t_f) == 0)
+# con reclamo in sospeso l'ospite risulta Assente / Reception
+frow = guests.for_reservation(rid_food)[0]
+d_food = guest_state.describe(frow, t_f)
+check("pasti: durante il reclamo -> Assente / Reception",
+      d_food["stato"] == "Assente" and d_food["locazione"] == "Reception")
+reception.remove([e for e in reception.pending() if e["kind"] == "food"][0]["id"])
+check("pasti: dopo le scuse non e piu in reception",
+      guest_state.describe(frow, t_f)["locazione"] != "Reception")
+
+t_ok = None
+for off2 in range(off + 1, off + 90):
+    day1 = date(2026, 6, 2) + timedelta(days=off2)
+    s1, _e = guest_state._meal_slot(gfood, day1, "Colazione")
+    cand = s1 + timedelta(minutes=10)
+    if guest_state.is_eating(gfood, "BB", "Colazione", cand):
+        t_ok = cand
+        break
+estate.set_food(5)
+check("pasti: con cibo nessun reclamo", reception.serve_meals(t_ok) == 0)
+check("pasti: consuma 1 unita di cibo", estate.food() == 4)
 
 print()
 if failures:

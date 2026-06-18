@@ -102,6 +102,33 @@ def get(res_id: int):
         "SELECT * FROM reservations WHERE id = ?", (res_id,)).fetchone()
 
 
+def change_room(res_id: int, new_room: int) -> None:
+    """Sposta la prenotazione su un'altra camera, stesse date.
+
+    Solo prima del check-in: una prenotazione gia in camera non si sposta.
+    """
+    res = get(res_id)
+    if res is None or res["status"] != "booked":
+        raise ValidationError(
+            "Solo le prenotazioni non ancora in check-in si possono spostare.")
+    if new_room == res["room_number"]:
+        return
+    room = rooms.get_room(new_room)
+    if room is None:
+        raise ValidationError(f"La camera {new_room} non esiste.")
+    if room["blocked"]:
+        raise ValidationError(f"La camera {new_room} e bloccata.")
+    checkin = date.fromisoformat(res["checkin_date"])
+    checkout = date.fromisoformat(res["checkout_date"])
+    if not is_room_available(new_room, checkin, checkout, exclude_id=res_id):
+        raise ValidationError(
+            f"La camera {new_room} non e libera in quel periodo.")
+    conn = get_conn()
+    conn.execute("UPDATE reservations SET room_number = ? WHERE id = ?",
+                 (new_room, res_id))
+    conn.commit()
+
+
 def current_for_room(room_number: int):
     """Prenotazione checked-in della camera, se presente."""
     return get_conn().execute(

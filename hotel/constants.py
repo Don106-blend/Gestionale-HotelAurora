@@ -2,9 +2,8 @@
 
 from dataclasses import dataclass
 
-FLOORS = (1, 2, 3)
-ROOMS_PER_FLOOR = 27
-SUITE_NUMBERS = range(23, 28)  # camere 23-27 di ogni piano
+INITIAL_ROOMS = 10   # camere all'avvio (piano 1); le altre si comprano
+INITIAL_SUITES = 2   # di cui suite (le ultime due numerazioni)
 
 STD_MAX_ADULTS = 2
 SUITE_MAX_ADULTS = 4

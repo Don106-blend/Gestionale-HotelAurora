@@ -19,6 +19,7 @@ rng = random.Random()
 @dataclass
 class MailConfig:
     enabled: bool = False
+    block_new_bookings: bool = False     # blocca l'arrivo di nuove prenotazioni
     interval_seconds: int = 60
     probability: float = 0.5
     auto_insert: bool = False

@@ -34,12 +34,13 @@ class _BaseGrid(ttk.Frame):
         self.canvas.delete("all")
         self._begin_refresh()
         y = PAD
-        for floor in constants.FLOORS:
+        all_rooms = rooms.all_rooms()
+        for floor in rooms.floors():
             self.canvas.create_text(PAD, y + 8, anchor="w",
                                     text=f"Piano {floor}",
                                     font=("TkDefaultFont", 10, "bold"))
             y += 24
-            floor_rooms = [r for r in rooms.all_rooms() if r["floor"] == floor]
+            floor_rooms = [r for r in all_rooms if r["floor"] == floor]
             for i, room in enumerate(floor_rooms):
                 x = PAD + (i % COLS) * (CELL_W + PAD)
                 ry = y + (i // COLS) * (CELL_H + PAD)

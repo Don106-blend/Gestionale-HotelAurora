@@ -45,8 +45,12 @@ class ReceptionWindow(tk.Toplevel):
         for entry in rows:
             self._row(entry)
 
+    LABELS = {"checkout": "Check-out", "checkin": "Check-in",
+              "food": "Reclamo cibo"}
+    BUTTONS = {"checkout": "Check-out", "checkin": "Check-in", "food": "Parla"}
+
     def _row(self, entry):
-        kind = "Check-out" if entry["kind"] == "checkout" else "Check-in"
+        kind = self.LABELS.get(entry["kind"], "Check-in")
         arrived = datetime.fromisoformat(entry["arrived_at"])
 
         fr = ttk.Frame(self._body)
@@ -58,7 +62,7 @@ class ReceptionWindow(tk.Toplevel):
         time_lbl = tk.Label(fr, text=arrived.strftime("%H:%M"),
                             foreground="red" if self._late(entry) else "black")
         time_lbl.pack(side="left", padx=6)
-        ttk.Button(fr, text=kind,
+        ttk.Button(fr, text=self.BUTTONS.get(entry["kind"], "Check-in"),
                    command=lambda: self._act(entry)).pack(side="right")
 
     def _act(self, entry):
@@ -66,7 +70,52 @@ class ReceptionWindow(tk.Toplevel):
             CheckoutView(self, reservations.get(entry["reservation_id"]),
                          on_done=lambda: (reception.remove(entry["id"]),
                                           self.on_change(), self._refresh()))
+        elif entry["kind"] == "food":
+            FoodComplaintView(self, entry,
+                              on_done=lambda: (reception.remove(entry["id"]),
+                                               self.on_change(), self._refresh()))
         else:
             reception.checkin_entry(entry["id"])
             self.on_change()
             self._refresh()
+
+
+class FoodComplaintView(tk.Toplevel):
+    """L'ospite rimasto senza cibo si lamenta: una serie di messaggi che si
+    chiudono uno alla volta col tasto 'Scusati'. Finiti, torna in camera."""
+
+    MESSAGES = (
+        "Scusate, ero sceso per il pasto ma non c'e niente da mangiare!",
+        "Ho prenotato il trattamento coi pasti inclusi, e una vergogna.",
+        "Vi prego di rifornire la cucina al piu presto.",
+    )
+
+    def __init__(self, master, entry, on_done):
+        super().__init__(master)
+        self.entry = entry
+        self.on_done = on_done
+        self.title("Reclamo: manca il cibo")
+        self.transient(master)
+        self.grab_set()
+        self._i = 0
+        self._body = ttk.Frame(self, padding=16)
+        self._body.pack(fill="both", expand=True)
+        self._render()
+
+    def _render(self):
+        for w in self._body.winfo_children():
+            w.destroy()
+        name = f"{self.entry['first_name']} {self.entry['last_name']}".strip()
+        ttk.Label(self._body, text=f"{name} (Camera {self.entry['room_number']})",
+                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        ttk.Label(self._body, text=self.MESSAGES[self._i], wraplength=320,
+                  justify="left").pack(anchor="w", pady=(8, 12))
+        ttk.Button(self._body, text="Scusati", command=self._next).pack()
+
+    def _next(self):
+        self._i += 1
+        if self._i >= len(self.MESSAGES):
+            self.on_done()
+            self.destroy()
+        else:
+            self._render()
