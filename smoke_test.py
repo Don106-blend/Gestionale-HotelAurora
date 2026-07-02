@@ -19,7 +19,9 @@ if database.DB_PATH.exists():
 
 from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
                    guest_state, guests, mail, meals, persistence, reception,
-                   reservations, rooms, staff)
+                   reservations, reviews, rooms, staff)
+
+staff.SICK_PROB = 0.0   # malattie testate a parte: qui tutto deterministico
 
 failures = []
 
@@ -1128,6 +1130,144 @@ check("posti: durante il reclamo tavoli -> Assente / Reception",
       guest_state.describe(trow, t_t)["locazione"] == "Reception")
 database._seed_dining(database.get_conn())   # ripristina la sala
 database.get_conn().commit()
+
+# --- recensioni e reputazione ---------------------------------------------------
+debug_seed.clear_all()
+check("recensioni: reputazione 5.0 senza recensioni",
+      reviews.reputation() == 5.0)
+rid_r1 = reservations.create_reservation(
+    first_name="Feli", last_name="Cissimo", room_number=101, checkin=d(-2),
+    checkout=today, adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_r1, {"first_name": "Feli", "last_name": "Cissimo"})
+reservations.do_checkout(rid_r1)
+check("recensioni: soggiorno senza reclami -> 5 stelle",
+      reviews.all_reviews()[0]["stars"] == 5)
+
+rid_r2 = reservations.create_reservation(
+    first_name="Delu", last_name="So", room_number=102, checkin=d(-2),
+    checkout=today, adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_r2, {"first_name": "Delu", "last_name": "So"})
+reception._bump_complaints(rid_r2)
+reception._bump_complaints(rid_r2)
+reservations.do_checkout(rid_r2)
+check("recensioni: 2 reclami -> 1 stella",
+      reviews.all_reviews()[0]["stars"] == 1)
+check("reputazione: media delle recensioni", reviews.reputation() == 3.0)
+check("reputazione: demand_factor da 0.4 a 1.0",
+      reviews.demand_factor() == round(0.4 + 0.12 * 3.0, 2))
+reviews.leave_angry(reservations.get(rid_r1))
+check("recensioni: arrabbiato -> 0 stelle",
+      reviews.all_reviews()[0]["stars"] == 0)
+
+# stagionalita: la domanda cambia col mese (x reputazione)
+clock.set_now(datetime(2026, 7, 15, 10))
+check("stagione: luglio pieno (x1.5)",
+      mail.demand_factor() == 1.5 * reviews.demand_factor())
+clock.set_now(datetime(2026, 11, 15, 10))
+check("stagione: novembre morto (x0.6)",
+      mail.demand_factor() == 0.6 * reviews.demand_factor())
+clock.set_now(None)
+
+# --- usura camere ----------------------------------------------------------------
+debug_seed.clear_all()
+rid_w = reservations.create_reservation(
+    first_name="U", last_name="Sura", room_number=101, checkin=d(-1),
+    checkout=today, adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_w, {"first_name": "U", "last_name": "Sura"})
+reservations.do_checkout(rid_w)
+check("usura: +1 a ogni check-out", rooms.get_room(101)["wear"] == 1)
+database.get_conn().execute("UPDATE rooms SET wear = 10 WHERE number = 102")
+database.get_conn().commit()
+check("usura: camera logora elencata",
+      102 in [r["number"] for r in rooms.worn_rooms()])
+rid_w2 = reservations.create_reservation(
+    first_name="Scon", last_name="Tento", room_number=102, checkin=d(-1),
+    checkout=today, adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_w2, {"first_name": "Scon", "last_name": "Tento"})
+reservations.do_checkout(rid_w2)
+check("usura: check-out da camera logora -> 3 stelle",
+      reviews.all_reviews()[0]["stars"] == 3)
+budget.record(budget.INCOME, "TestRinnovo", 1000)
+estate.renovate_room(102)
+check("usura: rinnovo azzera l'usura", rooms.get_room(102)["wear"] == 0)
+check("usura: rinnovo su camera sana rifiutato",
+      _raises(lambda: estate.renovate_room(101)))
+
+# --- bollette --------------------------------------------------------------------
+check("bollette: primo mese di gioco gratis",
+      estate.run_utilities(date(2026, 9, 1)) == 0.0)
+check("bollette: stesso mese non riaddebita",
+      estate.run_utilities(date(2026, 9, 15)) == 0.0)
+expected_util = round(estate.UTILITY_BASE
+                      + estate.UTILITY_PER_ROOM * len(rooms.all_rooms()), 2)
+check("bollette: al cambio mese base + quota camere",
+      estate.run_utilities(date(2026, 10, 1)) == expected_util)
+check("bollette: una sola volta al mese",
+      estate.run_utilities(date(2026, 10, 20)) == 0.0)
+
+# --- malattie del personale --------------------------------------------------------
+staff.SICK_PROB = 1.0
+check("malattia: is_sick deterministico",
+      staff.is_sick(1, today) == staff.is_sick(1, today))
+check("malattia: i malati non sono in servizio",
+      staff.on_duty(staff.ROLE_CLEANING) == [])
+staff.SICK_PROB = 0.0
+check("malattia: con prob 0 tutti presenti",
+      len(staff.on_duty(staff.ROLE_CLEANING))
+      == staff.roster()[staff.ROLE_CLEANING])
+
+# --- esperienza (velocita pulizie) --------------------------------------------------
+eid_x = staff.hire(staff.ROLE_CLEANING)
+check("esperienza: nuovo assunto a velocita base",
+      staff.speed_factor(eid_x) == 1.0)
+staff.log_hours(eid_x, today, 100.0)
+check("esperienza: +5% ogni 50 ore", staff.speed_factor(eid_x) == 1.10)
+staff.log_hours(eid_x, today, 10000.0)
+check("esperienza: velocita massima x1.5", staff.speed_factor(eid_x) == 1.5)
+database.get_conn().execute("DELETE FROM work_hours WHERE employee_id = ?",
+                            (eid_x,))
+database.get_conn().execute("DELETE FROM employees WHERE id = ?", (eid_x,))
+database.get_conn().commit()
+
+# --- room service ------------------------------------------------------------------
+debug_seed.clear_all()
+rid_rs = reservations.create_reservation(
+    first_name="Ordi", last_name="Natore", room_number=101, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_rs, {"first_name": "Ordi", "last_name": "Natore"})
+grs = guests.for_reservation(rid_rs)[0]["id"]
+hits = []
+for off in range(0, 500):
+    day_rs = date(2026, 6, 2) + timedelta(days=off)
+    r = random.Random(f"rs:{grs}:{day_rs.isoformat()}")
+    wants = r.random() < reception.RS_PROB
+    hour = r.randint(11, 22)
+    when = datetime.combine(day_rs, time(hour, 30))
+    if wants and not guest_state._is_asleep(grs, when):
+        hits.append(when)
+    if len(hits) == 2:
+        break
+check("room service: trovati ordini deterministici", len(hits) == 2)
+estate.set_food(5)
+bal_rs = budget.totals()["balance"]
+check("room service: ordine servito senza reclami",
+      reception.room_service(hits[0]) == 0)
+check("room service: consuma 1 cibo e incassa 15",
+      estate.food() == 4
+      and budget.totals()["balance"] == round(bal_rs + reception.RS_PRICE, 2))
+check("room service: al massimo un ordine al giorno",
+      reception.room_service(hits[0]) == 0 and estate.food() == 4)
+estate.set_food(0)
+check("room service: dispensa vuota -> reclamo cibo",
+      reception.room_service(hits[1]) == 1
+      and any(e["kind"] == "food" for e in reception.pending()))
+check("room service: il reclamo pesa sulla recensione",
+      reservations.get(rid_rs)["complaints"] == 1)
 
 print()
 if failures:

@@ -9,7 +9,7 @@ spawnano insieme); il check-out e per prenotazione.
 import random
 from datetime import date, datetime, time, timedelta
 
-from . import clock, guests, names, reservations
+from . import budget, clock, guests, names, reservations
 from .database import get_conn
 
 rng = random.Random()
@@ -108,7 +108,16 @@ def handle_anger(now) -> int:
                      (rid,))
         conn.commit()
         guests.add_to_blacklist(res["first_name"], res["last_name"])
+        from . import reviews    # import differito
+        reviews.leave_angry(res)
     return len(res_ids)
+
+
+def _bump_complaints(res_id: int) -> None:
+    """Segna un reclamo sul soggiorno: pesera sulla recensione finale."""
+    get_conn().execute(
+        "UPDATE reservations SET complaints = complaints + 1 WHERE id = ?",
+        (res_id,))
 
 
 def serve_meals(now) -> int:
@@ -153,7 +162,48 @@ def serve_meals(now) -> int:
             " AND meal = ?", (g["id"], day, meal))
         _add(g["reservation_id"], kind, g["first_name"], g["last_name"],
              False, now)
+        _bump_complaints(g["reservation_id"])
         complaints += 1
+    conn.commit()
+    return complaints
+
+
+RS_PROB = 0.15      # probabilita giornaliera che un ospite ordini in camera
+RS_PRICE = 15.0     # prezzo del servizio in camera (consuma 1 unita di cibo)
+
+
+def room_service(now) -> int:
+    """Richieste speciali: qualche ospite sveglio ordina in camera (orario
+    deterministico per ospite/giorno). Consuma 1 unita di cibo e incassa
+    RS_PRICE; a dispensa vuota diventa un reclamo 'food'. Ritorna i reclami."""
+    from . import guest_state, estate   # differiti: evitano il ciclo
+    conn = get_conn()
+    day = now.date()
+    complaints = 0
+    for g in guests.checked_in_guests():
+        r = random.Random(f"rs:{g['id']}:{day.isoformat()}")
+        wants = r.random() < RS_PROB
+        hour = r.randint(11, 22)
+        if not wants or now.hour != hour:
+            continue
+        if guest_state._is_asleep(g["id"], now):
+            continue
+        cur = conn.execute(     # dedup: al massimo un ordine al giorno
+            "INSERT OR IGNORE INTO meals_served (guest_id, day, meal)"
+            " VALUES (?, ?, 'RoomService')", (g["id"], day.isoformat()))
+        if cur.rowcount == 0:
+            continue
+        if estate.consume_food(1):
+            budget.record(budget.INCOME, "Room service", RS_PRICE,
+                          f"Camera {g['room_number']}")
+        else:
+            conn.execute(
+                "UPDATE meals_served SET ok = 0 WHERE guest_id = ? AND day = ?"
+                " AND meal = 'RoomService'", (g["id"], day.isoformat()))
+            _add(g["reservation_id"], "food", g["first_name"], g["last_name"],
+                 False, now)
+            _bump_complaints(g["reservation_id"])
+            complaints += 1
     conn.commit()
     return complaints
 

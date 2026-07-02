@@ -9,6 +9,8 @@ STD_MAX_ADULTS = 2
 SUITE_MAX_ADULTS = 4
 MAX_CHILDREN = 1
 
+WEAR_LIMIT = 10   # check-out dopo i quali la camera e logora (da rinnovare)
+
 VAT_RATE = 0.22
 PAYMENT_DEFAULT = "Pagdir"
 

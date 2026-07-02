@@ -240,11 +240,21 @@ def do_checkout(res_id: int, *, paid: bool = True) -> None:
     res = get(res_id)
     if res is None or res["status"] != "checked_in":
         raise ValidationError("Prenotazione non valida per il check-out.")
+    from . import reviews   # import differito: evita il ciclo
     conn = get_conn()
     conn.execute("UPDATE reservations SET status = 'checked_out' WHERE id = ?",
                  (res_id,))
+    # usura: camera gia logora -> l'ospite se ne accorge (reclamo implicito)
+    room = rooms.get_room(res["room_number"])
+    complaints = res["complaints"] + (1 if room["wear"] >= constants.WEAR_LIMIT
+                                      else 0)
+    conn.execute("UPDATE rooms SET wear = wear + 1 WHERE number = ?",
+                 (res["room_number"],))
     conn.commit()
     rooms.set_dirty(res["room_number"], True)
+    # recensione di fine soggiorno: 5 stelle, -2 a reclamo, -1 se non paga
+    reviews._add(f"{res['first_name']} {res['last_name']}".strip(),
+                 reviews.STARS_MAX - 2 * complaints - (0 if paid else 1))
 
     if not paid:
         budget.record(budget.INCOME, "Soggiorno", 0, "L'ospite non ha pagato.")

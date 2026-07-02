@@ -131,11 +131,22 @@ def _roster_rollover() -> None:
         kv_set("roster_next_day", None)
 
 
+SICK_PROB = 0.03    # probabilita giornaliera di malattia
+
+
+def is_sick(emp_id: int, day: date) -> bool:
+    """Malattia deterministica per (dipendente, giorno): non si presenta."""
+    return random.Random(f"sick:{emp_id}:{day.isoformat()}").random() < SICK_PROB
+
+
 def on_duty(role: str):
-    """I dipendenti chiamati oggi per il ruolo (i primi N assunti)."""
-    return get_conn().execute(
+    """I dipendenti chiamati oggi per il ruolo (i primi N assunti), esclusi
+    i malati: chi e a casa non lavora (e non viene pagato)."""
+    rows = get_conn().execute(
         "SELECT * FROM employees WHERE role = ? ORDER BY id LIMIT ?",
         (role, roster().get(role, 0))).fetchall()
+    today = clock.today()
+    return [r for r in rows if not is_sick(r["id"], today)]
 
 
 # --- foglio ore ----------------------------------------------------------------
@@ -165,6 +176,14 @@ def unpaid_cost() -> float:
     """Stima del prossimo stipendio complessivo (costo azienda)."""
     return round(sum(unpaid_hours(e["id"]) * e["hourly"] * EMPLOYER_COST_MULT
                      for e in all_employees()), 2)
+
+
+def speed_factor(emp_id: int) -> float:
+    """Esperienza: +5% di velocita ogni 50 ore lavorate in carriera (max +50%)."""
+    lifetime = get_conn().execute(
+        "SELECT COALESCE(SUM(hours), 0) FROM work_hours"
+        " WHERE employee_id = ?", (emp_id,)).fetchone()[0]
+    return min(1.5, 1.0 + 0.05 * int(lifetime // 50))
 
 
 def hours_sheet(day: date) -> str:
@@ -273,11 +292,13 @@ def housekeeping_tick(now: datetime) -> bool:
     end_of_shift = datetime.combine(now.date(), time(CLEAN_END))
     for e in idle:
         done_h = _hk["hours"].get(e["id"], 0.0)
+        speed = speed_factor(e["id"])   # esperienza: pulisce piu in fretta
         for i, t in enumerate(tasks):
-            end = now + timedelta(hours=t.hours)
-            if (done_h + t.hours <= constants.OPERATOR_MAX_HOURS
+            dur = round(t.hours / speed, 4)
+            end = now + timedelta(hours=dur)
+            if (done_h + dur <= constants.OPERATOR_MAX_HOURS
                     and end <= end_of_shift):
-                _hk["busy"][e["id"]] = (t.room_number, end, t.hours)
+                _hk["busy"][e["id"]] = (t.room_number, end, dur)
                 tasks.pop(i)
                 changed = True
                 break

@@ -115,7 +115,8 @@ class HotelApp(tk.Tk):
             "  striscia gialla a destra = check-out oggi  |"
             "  quadrato fucsia (alto dx) = arrivo oggi  |"
             "  quadrato blu (basso dx) = arrivo domani\n"
-            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite  |"
+            "linea grigia = sporca  |  linea rossa = bloccata  |  linea"
+            " arancione = logora  |  S = suite  |"
             "  pallino rosa (Occupazione) = pulizie in corso"))
         legend.pack(fill="x", side="bottom")
 
@@ -203,8 +204,9 @@ class HotelApp(tk.Tk):
         cfg = mail.config
         factor = clock.freq_factor()
         if cfg.enabled and not cfg.block_new_bookings and factor > 0:
-            # la probabilita dipende dal turno (notte rarissima, pranzo/sera rare)
-            rate = mail.shift_probability() / max(cfg.interval_seconds, 1) * factor
+            # probabilita per turno (notte rarissima) x stagione x reputazione
+            rate = (mail.shift_probability() * mail.demand_factor()
+                    / max(cfg.interval_seconds, 1) * factor)
             if random.random() < min(rate, 1.0):
                 self.spawn_mail()
         self.after(1000, self._mail_tick)
@@ -243,7 +245,10 @@ class HotelApp(tk.Tk):
             changed = reception.handle_anger(now)         # ospiti spazientiti
             changed += reception.serve_meals(now)         # consumo cibo / reclami
             changed += reservations.auto_checkout_overstayers(now)  # uscite d'ufficio
+            changed += reception.room_service(now)   # ordini in camera
             changed += staff.tick(now)   # pulizie simulate, ore sala, stipendi
+            if estate.run_utilities(now.date()):     # bollette a inizio mese
+                changed += 1
             if changed:
                 self.refresh()
             self.occupancy_page.refresh()  # sonno/veglia/uscite: cambia col tempo

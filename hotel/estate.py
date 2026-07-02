@@ -121,6 +121,42 @@ def _spend(cost: float, note: str) -> None:
     budget.record(budget.LOSS, "Ristrutturazione", cost, note)
 
 
+# --- bollette e rinnovo camere ------------------------------------------------
+
+UTILITY_BASE = 150.0      # utenze mensili fisse
+UTILITY_PER_ROOM = 2.0    # + quota per camera posseduta
+RENOVATE_COST = 300.0     # rinnovo di una camera logora (azzera l'usura)
+
+
+def run_utilities(today) -> float:
+    """Al cambio mese addebita le utenze (base + quota camere). Il primo mese
+    di gioco e gratis: registra solo il mese di partenza."""
+    month = today.strftime("%Y-%m")
+    last = kv_get("last_utilities")
+    if last == month:
+        return 0.0
+    kv_set("last_utilities", month)
+    if last is None:            # primo avvio: nessun addebito retroattivo
+        return 0.0
+    n_rooms = get_conn().execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
+    amount = round(UTILITY_BASE + UTILITY_PER_ROOM * n_rooms, 2)
+    budget.record(budget.LOSS, "Bollette", amount, f"Utenze {month}")
+    return amount
+
+
+def renovate_room(number: int) -> None:
+    """Rinnova una camera logora: costa RENOVATE_COST e azzera l'usura."""
+    room = get_conn().execute("SELECT * FROM rooms WHERE number = ?",
+                              (number,)).fetchone()
+    if room is None:
+        raise EstateError("Camera inesistente.")
+    if room["wear"] < constants.WEAR_LIMIT:
+        raise EstateError("La camera non ha bisogno di rinnovo.")
+    _spend(RENOVATE_COST, f"Rinnovo camera {number}")
+    get_conn().execute("UPDATE rooms SET wear = 0 WHERE number = ?", (number,))
+    get_conn().commit()
+
+
 # --- dispensa cibo (AllFoods!) ----------------------------------------------
 
 def food() -> int:
@@ -175,7 +211,7 @@ def reset_all() -> None:
     conn = get_conn()
     for table in ("reservation_guests", "reservations", "guests", "ledger",
                   "mails", "reception", "blacklist", "meals_served",
-                  "work_hours", "employees", "dining_tables", "rooms",
-                  "settings"):
+                  "work_hours", "employees", "dining_tables", "reviews",
+                  "rooms", "settings"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()

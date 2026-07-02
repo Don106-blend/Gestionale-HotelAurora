@@ -75,6 +75,19 @@ class RenovationWindow(tk.Toplevel):
             command=lambda: self._do(dining.buy_chair))
         self.chair_btn.pack(side="left")
 
+        ttk.Separator(f).pack(fill="x", pady=8)
+        ttk.Label(f, text="Rinnovo camere logore",
+                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        wrow = ttk.Frame(f)
+        wrow.pack(fill="x", pady=4)
+        ttk.Label(wrow, text="Camera:").pack(side="left")
+        self.worn_var = tk.StringVar()
+        self.worn_combo = ttk.Combobox(wrow, textvariable=self.worn_var,
+                                       width=7, state="readonly")
+        self.worn_combo.pack(side="left", padx=4)
+        self.renovate_btn = ttk.Button(wrow, command=self._renovate)
+        self.renovate_btn.pack(side="left", padx=4)
+
         self.msg = ttk.Label(f, foreground="red")
         self.msg.pack(anchor="w", pady=(6, 0))
 
@@ -117,6 +130,18 @@ class RenovationWindow(tk.Toplevel):
         self.chair_btn.config(state="normal" if bal >= dining.CHAIR_COST
                               else "disabled")
 
+        from hotel import rooms
+        worn = [str(r["number"]) for r in rooms.worn_rooms()]
+        self.worn_combo["values"] = worn
+        if worn and self.worn_var.get() not in worn:
+            self.worn_var.set(worn[0])
+        if not worn:
+            self.worn_var.set("")
+        self.renovate_btn.config(
+            text=f"Rinnova — € {estate.RENOVATE_COST:,.0f}",
+            state="normal" if (worn and bal >= estate.RENOVATE_COST)
+            else "disabled")
+
     def _buy_floor(self):
         self._do(estate.buy_floor)
 
@@ -126,6 +151,9 @@ class RenovationWindow(tk.Toplevel):
 
     def _upgrade_food(self):
         self._do(estate.upgrade_food_cap)
+
+    def _renovate(self):
+        self._do(lambda: estate.renovate_room(int(self.worn_var.get())))
 
     def _do(self, action):
         self.msg.config(text="")

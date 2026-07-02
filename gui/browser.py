@@ -8,6 +8,7 @@ from hotel import mail
 from .allfoods import AllFoodsWindow
 from .mail_view import MailInbox
 from .renovation import RenovationWindow
+from .reviews_view import ReviewsWindow
 
 
 class BrowserPage(ttk.Frame):
@@ -26,6 +27,7 @@ class BrowserPage(ttk.Frame):
              lambda: RenovationWindow(self.app, on_change=self.app.refresh)),
             ("AllFoods!",
              lambda: AllFoodsWindow(self.app, on_change=self.app.refresh)),
+            ("TrustHotel", lambda: ReviewsWindow(self.app)),
         )
         for i, (label, cmd) in enumerate(apps):
             ttk.Button(grid, text=label, width=22, command=cmd).grid(

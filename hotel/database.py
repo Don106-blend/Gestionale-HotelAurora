@@ -126,6 +126,14 @@ CREATE TABLE IF NOT EXISTS dining_tables (
     row    INTEGER NOT NULL DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS reviews (
+    id    INTEGER PRIMARY KEY AUTOINCREMENT,
+    day   TEXT NOT NULL,
+    guest TEXT NOT NULL,
+    stars INTEGER NOT NULL,
+    text  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -188,6 +196,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "ok" not in ms_cols:
         conn.execute("ALTER TABLE meals_served ADD COLUMN ok INTEGER"
                      " NOT NULL DEFAULT 1")
+    res_cols = [r[1] for r in conn.execute("PRAGMA table_info(reservations)")]
+    if "complaints" not in res_cols:      # reclami subiti durante il soggiorno
+        conn.execute("ALTER TABLE reservations ADD COLUMN complaints INTEGER"
+                     " NOT NULL DEFAULT 0")
+    room_cols = [r[1] for r in conn.execute("PRAGMA table_info(rooms)")]
+    if "wear" not in room_cols:           # usura: check-out dall'ultimo rinnovo
+        conn.execute("ALTER TABLE rooms ADD COLUMN wear INTEGER"
+                     " NOT NULL DEFAULT 0")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:

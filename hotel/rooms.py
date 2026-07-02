@@ -25,6 +25,14 @@ def set_dirty(number: int, dirty: bool) -> None:
     conn.commit()
 
 
+def worn_rooms():
+    """Camere logore (usura oltre il limite): da rinnovare."""
+    from . import constants
+    return get_conn().execute(
+        "SELECT * FROM rooms WHERE wear >= ? ORDER BY number",
+        (constants.WEAR_LIMIT,)).fetchall()
+
+
 def set_blocked(number: int, blocked: bool) -> None:
     conn = get_conn()
     conn.execute("UPDATE rooms SET blocked = ? WHERE number = ?",

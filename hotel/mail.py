@@ -37,6 +37,17 @@ def shift_probability() -> float:
     """Probabilita mail del turno corrente (standard se non specificata)."""
     return config.shift_probability.get(clock.shift()[0], config.probability)
 
+
+# Stagionalita della domanda: estate piena, dicembre festivo, novembre morto.
+SEASON_FACTOR = {1: 0.7, 2: 0.6, 3: 0.8, 4: 1.0, 5: 1.1, 6: 1.3,
+                 7: 1.5, 8: 1.5, 9: 1.1, 10: 0.8, 11: 0.6, 12: 1.2}
+
+
+def demand_factor() -> float:
+    """Moltiplicatore del flusso prenotazioni: stagione x reputazione."""
+    from . import reviews
+    return SEASON_FACTOR[clock.today().month] * reviews.demand_factor()
+
 # Template in tono naturale. Placeholder: name, email, pax, guests, nights,
 # checkin, checkout, board. Aggiungere un template = aggiungere una stringa.
 TEMPLATES = (
@@ -75,10 +86,13 @@ def _it(iso: str) -> str:
 def _pick_returning_guest():
     """Un ospite abituale senza prenotazioni attive, oppure None.
 
-    Riusa il DB ospiti con probabilita config.returning_probability ed esclude
-    chi ha gia una prenotazione programmata (stesso nome): niente doppioni.
+    Riusa il DB ospiti con probabilita config.returning_probability (ridotta
+    dalla reputazione: chi si e trovato male non torna) ed esclude chi ha gia
+    una prenotazione programmata (stesso nome): niente doppioni.
     """
-    if rng.random() >= config.returning_probability:
+    from . import reviews
+    if rng.random() >= config.returning_probability * (reviews.reputation()
+                                                       / reviews.STARS_MAX):
         return None
     rows = get_conn().execute(
         "SELECT DISTINCT first_name, last_name FROM guests g"

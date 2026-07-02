@@ -157,6 +157,9 @@ class RoomGrid(_BaseGrid):
         if room["blocked"]:
             self.canvas.create_line(x + 4, y + 4, x + CELL_W - 4, y + 4,
                                     fill=constants.COLOR_BLOCKED_LINE, width=3)
+        if room["wear"] >= constants.WEAR_LIMIT:   # logora: da rinnovare
+            self.canvas.create_line(x + 4, y + 6, x + 4, y + CELL_H - 6,
+                                    fill="#e07b00", width=3)
 
         # marcatori di arrivo, disegnati per ultimi cosi restano in evidenza
         if reservations.arrival_on(number, today):

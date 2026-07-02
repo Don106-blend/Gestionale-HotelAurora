@@ -10,7 +10,7 @@ class StaffWindow(tk.Toplevel):
     COLUMNS = (("name", "Dipendente", 170), ("role", "Ruolo", 90),
                ("hourly", "€/h lordi", 70), ("hired", "Assunto il", 90),
                ("month", "Ore mese", 80), ("unpaid", "Da pagare (h)", 90),
-               ("served", "Ospiti serviti", 90))
+               ("stat", "Serviti / Velocita", 110))
 
     def __init__(self, master, on_change=None):
         super().__init__(master)
@@ -68,12 +68,16 @@ class StaffWindow(tk.Toplevel):
         today = clock.today()
         self.tree.delete(*self.tree.get_children())
         for e in staff.all_employees():
+            name = f"{e['first_name']} {e['last_name']}"
+            if staff.is_sick(e["id"], today):
+                name += "  (malato oggi)"
+            stat = (f"{e['served']} serviti"
+                    if e["role"] == staff.ROLE_DINING
+                    else f"x{staff.speed_factor(e['id']):.2f} velocita")
             self.tree.insert("", "end", iid=str(e["id"]), values=(
-                f"{e['first_name']} {e['last_name']}",
-                staff.ROLE_LABELS[e["role"]], f"{e['hourly']:g}",
+                name, staff.ROLE_LABELS[e["role"]], f"{e['hourly']:g}",
                 e["hired_on"], f"{staff.month_hours(e['id'], today):g}",
-                f"{staff.unpaid_hours(e['id']):g}",
-                e["served"] if e["role"] == staff.ROLE_DINING else "-"))
+                f"{staff.unpaid_hours(e['id']):g}", stat))
         current = staff.roster()
         nxt = staff.roster_next()
         for role, var in self.plan_vars.items():
