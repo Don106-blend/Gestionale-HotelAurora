@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import budget, estate
+from hotel import budget, dining, estate
 
 
 class RenovationWindow(tk.Toplevel):
@@ -54,6 +54,26 @@ class RenovationWindow(tk.Toplevel):
         self.food_lbl.pack(anchor="w", pady=2)
         self.foodcap_btn = ttk.Button(f, command=self._upgrade_food)
         self.foodcap_btn.pack(anchor="w", pady=4)
+        ttk.Separator(f).pack(fill="x", pady=8)
+
+        ttk.Label(f, text="Sala pasti", font=("TkDefaultFont", 10, "bold")).pack(
+            anchor="w")
+        self.dining_lbl = ttk.Label(f)
+        self.dining_lbl.pack(anchor="w", pady=2)
+        drow = ttk.Frame(f)
+        drow.pack(fill="x", pady=4)
+        self.table_btns = {}
+        for kind, label in (("single", "Tavolo singolo (4 posti)"),
+                            ("double", "Tavolo doppio (6 posti)")):
+            btn = ttk.Button(
+                drow, text=f"{label} — € {dining.TABLE_COSTS[kind]:,.0f}",
+                command=lambda k=kind: self._do(lambda: dining.buy_table(k)))
+            btn.pack(side="left", padx=(0, 4))
+            self.table_btns[kind] = btn
+        self.chair_btn = ttk.Button(
+            drow, text=f"Sedia — € {dining.CHAIR_COST:,.0f}",
+            command=lambda: self._do(dining.buy_chair))
+        self.chair_btn.pack(side="left")
 
         self.msg = ttk.Label(f, foreground="red")
         self.msg.pack(anchor="w", pady=(6, 0))
@@ -87,6 +107,15 @@ class RenovationWindow(tk.Toplevel):
         self.foodcap_btn.config(
             text=f"Aumenta capienza (+{estate.FOOD_CAP_STEP}) — € {up_cost:,.2f}",
             state="normal" if bal >= up_cost else "disabled")
+
+        dc = dining.counts()
+        self.dining_lbl.config(
+            text=f"Tavoli: {dc['tavoli']} — Sedie/posti: {dc['sedie']}")
+        for kind, btn in self.table_btns.items():
+            btn.config(state="normal" if bal >= dining.TABLE_COSTS[kind]
+                       else "disabled")
+        self.chair_btn.config(state="normal" if bal >= dining.CHAIR_COST
+                              else "disabled")
 
     def _buy_floor(self):
         self._do(estate.buy_floor)

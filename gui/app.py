@@ -4,12 +4,14 @@ import random
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import clock, estate, mail, persistence, reception, reservations
+from hotel import (clock, estate, mail, persistence, reception, reservations,
+                   staff)
 
 from .booking_form import BookingForm
 from .browser import BrowserPage
 from .budget_view import BudgetWindow
 from .debug_tool import DebugToolWindow
+from .dining_page import DiningPage
 from .guest_room import GuestRoomWindow
 from .mail_view import MailView
 from .reception_view import ReceptionWindow
@@ -17,6 +19,7 @@ from .reports import ReportWindow
 from .room_dialog import RoomDialog
 from .room_grid import OccupancyGrid, RoomGrid
 from .setup_dialog import SetupDialog
+from .staff_view import StaffWindow
 from .time_view import TimeWindow
 from .timeline import Timeline
 
@@ -34,6 +37,7 @@ class HotelApp(tk.Tk):
         persistence.load()       # ripristina lo stato di gioco salvato
         if not estate.is_setup_done():        # primo avvio: configura l'hotel
             self.wait_window(SetupDialog(self))
+        staff.ensure_seed()      # personale di partenza (1 pulizie + 2 sala)
         self.title(f"{estate.hotel_name()} - HotelAurora")
         self._build()
         self._last_shown_day = clock.today()
@@ -70,6 +74,9 @@ class HotelApp(tk.Tk):
                    command=self._open_debug).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Budget",
                    command=lambda: BudgetWindow(self)).pack(side="right", padx=2)
+        ttk.Button(toolbar, text="Dipendenti",
+                   command=lambda: StaffWindow(self, on_change=self.refresh)
+                   ).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Reception",
                    command=self._open_reception).pack(side="right", padx=2)
 
@@ -108,7 +115,8 @@ class HotelApp(tk.Tk):
             "  striscia gialla a destra = check-out oggi  |"
             "  quadrato fucsia (alto dx) = arrivo oggi  |"
             "  quadrato blu (basso dx) = arrivo domani\n"
-            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite"))
+            "linea grigia = sporca  |  linea rossa = bloccata  |  S = suite  |"
+            "  pallino rosa (Occupazione) = pulizie in corso"))
         legend.pack(fill="x", side="bottom")
 
         notebook = ttk.Notebook(self)
@@ -117,10 +125,12 @@ class HotelApp(tk.Tk):
         self.timeline_page = Timeline(notebook, on_change=self.refresh)
         self.occupancy_page = OccupancyGrid(
             notebook, on_room_click=self._open_guest_room)
+        self.dining_page = DiningPage(notebook, self)
         self.browser_page = BrowserPage(notebook, self)
         notebook.add(self.grid_page, text="Camere")
         notebook.add(self.timeline_page, text="Timeline")
         notebook.add(self.occupancy_page, text="Occupazione")
+        notebook.add(self.dining_page, text="Sala pasti")
         notebook.add(self.browser_page, text="Browser")
 
         self._update_time_display()
@@ -129,6 +139,7 @@ class HotelApp(tk.Tk):
         self.grid_page.refresh()
         self.timeline_page.refresh()
         self.occupancy_page.refresh()
+        self.dining_page.refresh()
 
     def _new_booking(self):
         BookingForm(self, on_done=self.refresh)
@@ -232,8 +243,11 @@ class HotelApp(tk.Tk):
             changed = reception.handle_anger(now)         # ospiti spazientiti
             changed += reception.serve_meals(now)         # consumo cibo / reclami
             changed += reservations.auto_checkout_overstayers(now)  # uscite d'ufficio
+            changed += staff.tick(now)   # pulizie simulate, ore sala, stipendi
             if changed:
                 self.refresh()
+            self.occupancy_page.refresh()  # sonno/veglia/uscite: cambia col tempo
+            self.dining_page.refresh()     # chi e a tavola cambia col tempo
         self._update_time_display()
         if clock.today() != self._last_shown_day:  # giorno avanzato: aggiorna
             self._last_shown_day = clock.today()

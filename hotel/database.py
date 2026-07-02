@@ -96,7 +96,34 @@ CREATE TABLE IF NOT EXISTS meals_served (
     guest_id INTEGER NOT NULL,
     day      TEXT NOT NULL,
     meal     TEXT NOT NULL,
+    ok       INTEGER NOT NULL DEFAULT 1,   -- 0 = pasto mancato (reclamo)
     PRIMARY KEY (guest_id, day, meal)
+);
+
+CREATE TABLE IF NOT EXISTS employees (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_name TEXT NOT NULL,
+    last_name  TEXT NOT NULL,
+    role       TEXT NOT NULL,              -- 'pulizie' | 'sala'
+    hourly     REAL NOT NULL DEFAULT 7.0,  -- paga oraria lorda
+    hired_on   TEXT NOT NULL,
+    served     INTEGER NOT NULL DEFAULT 0  -- ospiti serviti (solo sala)
+);
+
+CREATE TABLE IF NOT EXISTS work_hours (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    employee_id INTEGER NOT NULL REFERENCES employees(id),
+    day         TEXT NOT NULL,
+    hours       REAL NOT NULL,
+    paid        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS dining_tables (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL DEFAULT 'single',  -- 'single' (4 posti) | 'double' (6)
+    chairs INTEGER NOT NULL DEFAULT 0,
+    col    INTEGER NOT NULL DEFAULT 0,
+    row    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -127,6 +154,7 @@ def get_conn() -> sqlite3.Connection:
         _conn.executescript(_SCHEMA)
         _migrate(_conn)
         _seed_rooms(_conn)
+        _seed_dining(_conn)
         _conn.commit()
     return _conn
 
@@ -156,6 +184,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      ("archived", "INTEGER NOT NULL DEFAULT 0")):
         if col not in mail_cols:
             conn.execute(f"ALTER TABLE mails ADD COLUMN {col} {ddl}")
+    ms_cols = [r[1] for r in conn.execute("PRAGMA table_info(meals_served)")]
+    if "ok" not in ms_cols:
+        conn.execute("ALTER TABLE meals_served ADD COLUMN ok INTEGER"
+                     " NOT NULL DEFAULT 1")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:
@@ -170,3 +202,12 @@ def _seed_rooms(conn: sqlite3.Connection) -> None:
             "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
             " VALUES (?, ?, ?, ?, ?)",
             (100 + n, 1, int(is_suite), max_adults, constants.MAX_CHILDREN))
+
+
+def _seed_dining(conn: sqlite3.Connection) -> None:
+    if conn.execute("SELECT COUNT(*) FROM dining_tables").fetchone()[0] > 0:
+        return
+    # sala pasti di partenza: 4 tavoli singoli con 4 sedie ciascuno
+    for i in range(4):
+        conn.execute("INSERT INTO dining_tables (kind, chairs, col, row)"
+                     " VALUES ('single', 4, ?, 0)", (i,))

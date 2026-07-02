@@ -19,7 +19,7 @@ if database.DB_PATH.exists():
 
 from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
                    guest_state, guests, mail, meals, persistence, reception,
-                   reservations, rooms)
+                   reservations, rooms, staff)
 
 failures = []
 
@@ -886,6 +886,9 @@ check("cibo: costo potenziamento sale di 0,5x",
 
 # consumo pasti: ogni ospite che mangia scala 1 unita; senza cibo -> reclamo
 debug_seed.clear_all()
+staff.ensure_seed()          # serve personale di sala per la capienza
+database._seed_dining(database.get_conn())   # ...e tavoli dopo reset_all
+database.get_conn().commit()
 rid_food = reservations.create_reservation(
     first_name="Fame", last_name="Affamato", room_number=105, checkin=d(-1),
     checkout=d(2), adults=1, children=0, price_per_night=80, board="BB",
@@ -927,6 +930,204 @@ for off2 in range(off + 1, off + 90):
 estate.set_food(5)
 check("pasti: con cibo nessun reclamo", reception.serve_meals(t_ok) == 0)
 check("pasti: consuma 1 unita di cibo", estate.food() == 4)
+
+# --- dipendenti: seed, turni, ore, paghe ---------------------------------------
+check("staff: seed 1 pulizie + 2 sala",
+      staff.headcount(staff.ROLE_CLEANING) == 1
+      and staff.headcount(staff.ROLE_DINING) == 2)
+check("staff: roster di partenza",
+      staff.roster() == {staff.ROLE_CLEANING: 1, staff.ROLE_DINING: 2})
+
+eid = staff.hire(staff.ROLE_CLEANING)
+check("staff: assunzione registrata",
+      staff.headcount(staff.ROLE_CLEANING) == 2)
+clock.set_now(datetime(2026, 8, 1, 10, 0))
+staff.set_roster_next(staff.ROLE_CLEANING, 2)
+check("staff: modifica turni NON attiva oggi",
+      staff.roster()[staff.ROLE_CLEANING] == 1)
+clock.set_now(datetime(2026, 8, 2, 10, 0))
+check("staff: modifica turni attiva dal giorno dopo",
+      staff.roster()[staff.ROLE_CLEANING] == 2)
+
+# paghe: dal 20 del mese, ore x lordo x costo azienda (1.46)
+staff.log_hours(eid, date(2026, 8, 3), 4.0)
+check("staff: ore non pagate accumulate", staff.unpaid_hours(eid) == 4.0)
+check("staff: prima del 20 nessuna paga",
+      staff.run_payroll(date(2026, 8, 19)) == 0)
+paid = staff.run_payroll(date(2026, 8, 20))
+check("staff: paga = 4h x 7 x 1.46", paid == round(4 * 7 * 1.46, 2))
+check("staff: niente doppio pagamento nel mese",
+      staff.run_payroll(date(2026, 8, 21)) == 0)
+check("staff: ore segnate come pagate", staff.unpaid_hours(eid) == 0)
+
+# licenziamento: liquida subito le ore rimaste
+staff.log_hours(eid, date(2026, 8, 22), 2.0)
+sev = staff.fire(eid)
+check("staff: liquidazione al licenziamento", sev == round(2 * 7 * 1.46, 2))
+check("staff: licenziato rimosso",
+      staff.headcount(staff.ROLE_CLEANING) == 1)
+clock.set_now(None)
+
+# --- pulizie simulate ----------------------------------------------------------
+debug_seed.clear_all()
+rid_hk = reservations.create_reservation(
+    first_name="Sta", last_name="Yover", room_number=101, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_hk, {"first_name": "Sta", "last_name": "Yover"})
+cln = staff.on_duty(staff.ROLE_CLEANING)[0]["id"]
+t0 = datetime.combine(today, time(8, 0))
+staff.housekeeping_tick(t0)
+check("pulizie: operatore in camera (pallino rosa)",
+      staff.cleaner_in_room(101))
+staff.housekeeping_tick(t0 + timedelta(minutes=16))   # 0.25h = 15 min
+check("pulizie: camera pulita in automatico a fine lavoro",
+      rooms.get_room(101)["dirty"] == 0)
+check("pulizie: 0.25h accreditate sul foglio ore",
+      staff.month_hours(cln, today) == 0.25)
+check("pulizie: operatore uscito dalla camera",
+      not staff.cleaner_in_room(101))
+
+# check-out: la camera non si pulisce finche l'ospite e dentro
+rid_co = reservations.create_reservation(
+    first_name="Che", last_name="Ckout", room_number=102, checkin=d(-1),
+    checkout=today, adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_co, {"first_name": "Che", "last_name": "Ckout"})
+t1 = datetime.combine(today, time(9, 0))
+staff.housekeeping_tick(t1)
+check("pulizie: check-out non pulibile con l'ospite dentro",
+      not staff.cleaner_in_room(102))
+reservations.do_checkout(rid_co)
+staff.housekeeping_tick(t1 + timedelta(minutes=1))
+check("pulizie: dopo il check-out dell'ospite si pulisce",
+      staff.cleaner_in_room(102))
+check("pulizie: fuori orario (7-15) nessun nuovo lavoro",
+      not staff.housekeeping_tick(datetime.combine(today, time(18, 0)))
+      or not staff.cleaner_in_room(102))
+
+# --- sala pasti: piano turni e capienza ------------------------------------------
+debug_seed.clear_all()
+plan = staff.dining_plan(today)
+check("sala: ogni pasto ha almeno un operatore",
+      all(len(ids) >= 1 for ids in plan.values()))
+n_shifts = defaultdict(int)
+for ids in plan.values():
+    for i in ids:
+        n_shifts[i] += 1
+check("sala: max 2 turni a operatore",
+      all(n <= staff.DINING_MAX_SHIFTS for n in n_shifts.values()))
+check("sala: capienza 24 a operatore",
+      staff.dining_capacity("Colazione", today)
+      == 24 * len(plan["Colazione"]))
+
+# senza personale di sala -> reclamo 'service' anche con cibo in dispensa
+database.kv_set("roster", {staff.ROLE_CLEANING: 1, staff.ROLE_DINING: 0})
+rid_srv = reservations.create_reservation(
+    first_name="Ser", last_name="Vizio", room_number=103, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="BB",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_srv, {"first_name": "Ser", "last_name": "Vizio"})
+gsrv = guests.for_reservation(rid_srv)[0]["id"]
+t_s = None
+for off in range(0, 90):
+    day_s = date(2026, 6, 2) + timedelta(days=off)
+    s_s, _e = guest_state._meal_slot(gsrv, day_s, "Colazione")
+    cand = s_s + timedelta(minutes=10)
+    if guest_state.is_eating(gsrv, "BB", "Colazione", cand):
+        t_s = cand
+        break
+estate.set_food(10)
+check("sala: senza operatori il pasto genera reclamo servizio",
+      reception.serve_meals(t_s) == 1
+      and any(e["kind"] == "service" for e in reception.pending()))
+check("sala: il pasto mancato non consuma cibo", estate.food() == 10)
+database.kv_set("roster", {staff.ROLE_CLEANING: 1, staff.ROLE_DINING: 2})
+
+# --- sala pasti: tavoli, sedie e layout ------------------------------------------
+from hotel import dining
+database._seed_dining(database.get_conn())   # riseed dopo estate.reset_all
+database.get_conn().commit()
+check("tavoli: seed 4 singoli con 4 sedie",
+      len(dining.tables()) == 4
+      and all(t["kind"] == "single" and t["chairs"] == 4
+              for t in dining.tables()))
+check("tavoli: conteggi", dining.counts() == {"tavoli": 4, "sedie": 16})
+
+budget.record(budget.INCOME, "TestTavoli", 1000)
+bal0 = budget.totals()["balance"]
+tid = dining.buy_table("double")
+dining.buy_chair()      # va sul tavolo con meno sedie: il doppio nuovo (0)
+bal1 = budget.totals()["balance"]
+check("tavoli: doppio 100 + sedia 20 addebitati", bal0 - bal1 == 120.0)
+t_new = [t for t in dining.tables() if t["id"] == tid][0]
+check("tavoli: la sedia va sul tavolo piu scarico", t_new["chairs"] == 1)
+check("tavoli: cella libera assegnata (4,0)",
+      (t_new["col"], t_new["row"]) == (4, 0))
+check("tavoli: tipo sconosciuto rifiutato",
+      _raises(lambda: dining.buy_table("triple")))
+
+# sedie: quando tutti i tavoli sono al completo l'acquisto fallisce
+database.get_conn().execute(
+    "UPDATE dining_tables SET chairs = CASE kind WHEN 'double' THEN 6"
+    " ELSE 4 END")
+database.get_conn().commit()
+check("sedie: tutti i tavoli pieni -> acquisto rifiutato",
+      _raises(dining.buy_chair))
+
+# layout: spostamento su cella libera; occupata/fuori griglia rifiutati
+dining.move_table(tid, 2, 1)
+moved = [t for t in dining.tables() if t["id"] == tid][0]
+check("layout: tavolo spostato", (moved["col"], moved["row"]) == (2, 1))
+check("layout: cella occupata rifiutata",
+      _raises(lambda: dining.move_table(tid, 0, 0)))
+check("layout: fuori griglia rifiutato",
+      _raises(lambda: dining.move_table(tid, 99, 0)))
+
+# posti: stesso gruppo insieme, gruppi separati, best-fit, senza posto in attesa
+tabs = dining.tables()
+g_a = [{"room_number": 101}] * 2          # gruppo da 2 (camera 101)
+g_b = [{"room_number": 102}] * 6          # gruppo da 6: solo il doppio
+g_c = [{"room_number": 103}] * 7          # troppo grande: nessun tavolo
+placements, waiting = dining.assign_tables({1: g_a, 2: g_b, 3: g_c}, tabs)
+check("posti: ogni gruppo su un tavolo diverso",
+      len(placements) == 2
+      and {r for r, _m in placements.values()} == {1, 2})
+check("posti: il gruppo da 6 va sul tavolo doppio",
+      placements.get(tid, (None,))[0] == 2)
+check("posti: gruppo senza tavolo in attesa",
+      waiting == [(3, g_c)])
+check("posti: seating non esplode senza pasto in corso",
+      dining.seating(datetime(2026, 1, 1, 17)) == (None, {}, []))
+
+# senza tavolo libero -> reclamo 'table' (e niente cibo consumato)
+debug_seed.clear_all()
+database.get_conn().execute("DELETE FROM dining_tables")
+database.get_conn().commit()
+rid_tb = reservations.create_reservation(
+    first_name="Ta", last_name="Volo", room_number=104, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="BB",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_tb, {"first_name": "Ta", "last_name": "Volo"})
+gtb = guests.for_reservation(rid_tb)[0]["id"]
+t_t = None
+for off in range(0, 90):
+    day_t = date(2026, 6, 2) + timedelta(days=off)
+    s_t, _e = guest_state._meal_slot(gtb, day_t, "Colazione")
+    cand = s_t + timedelta(minutes=10)
+    if guest_state.is_eating(gtb, "BB", "Colazione", cand):
+        t_t = cand
+        break
+estate.set_food(10)
+check("posti: senza tavolo il pasto genera reclamo 'table'",
+      reception.serve_meals(t_t) == 1
+      and any(e["kind"] == "table" for e in reception.pending()))
+check("posti: il pasto senza tavolo non consuma cibo", estate.food() == 10)
+trow = guests.for_reservation(rid_tb)[0]
+check("posti: durante il reclamo tavoli -> Assente / Reception",
+      guest_state.describe(trow, t_t)["locazione"] == "Reception")
+database._seed_dining(database.get_conn())   # ripristina la sala
+database.get_conn().commit()
 
 print()
 if failures:

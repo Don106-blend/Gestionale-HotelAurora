@@ -112,15 +112,22 @@ def handle_anger(now) -> int:
 
 
 def serve_meals(now) -> int:
-    """Ogni ospite che inizia un pasto consuma 1 unita di cibo. Se manca,
-    compare in reception (kind 'food') per lamentarsi. Ogni pasto si conta una
-    sola volta per (ospite, giorno, pasto). Ritorna quanti reclami nuovi."""
-    from . import guest_state, estate   # import differiti: evitano il ciclo
+    """Ogni ospite che inizia un pasto consuma 1 unita di cibo, un posto in
+    sala (24 per operatore di turno) e un tavolo per il suo gruppo. Se manca
+    il cibo ('food'), il personale ('service') o un tavolo ('table') l'ospite
+    scende in reception a lamentarsi. Ogni pasto si conta una volta per
+    (ospite, giorno, pasto). Ritorna quanti reclami nuovi."""
+    from . import guest_state, estate, staff, dining  # differiti: no cicli
     meal = guest_state.current_meal(now)
     if meal is None:
         return 0
     conn = get_conn()
     day = now.date().isoformat()
+    capacity = staff.dining_capacity(meal, now.date())
+    no_table = {res_id for res_id, _m in dining.seating(now)[2]}
+    served_ok = conn.execute(
+        "SELECT COUNT(*) FROM meals_served WHERE day = ? AND meal = ?"
+        " AND ok = 1", (day, meal)).fetchone()[0]
     complaints = 0
     for g in guests.checked_in_guests():
         if not guest_state.is_eating(g["id"], g["board"], meal, now):
@@ -131,10 +138,22 @@ def serve_meals(now) -> int:
             " VALUES (?, ?, ?)", (g["id"], day, meal))
         if cur.rowcount == 0:
             continue
-        if not estate.consume_food(1):
-            _add(g["reservation_id"], "food", g["first_name"], g["last_name"],
-                 False, now)
-            complaints += 1
+        if g["reservation_id"] in no_table:           # nessun tavolo libero
+            kind = "table"
+        elif served_ok >= capacity:                   # nessuno che lo serva
+            kind = "service"
+        elif not estate.consume_food(1):              # dispensa vuota
+            kind = "food"
+        else:
+            served_ok += 1
+            staff.add_served(meal, now.date())
+            continue
+        conn.execute(
+            "UPDATE meals_served SET ok = 0 WHERE guest_id = ? AND day = ?"
+            " AND meal = ?", (g["id"], day, meal))
+        _add(g["reservation_id"], kind, g["first_name"], g["last_name"],
+             False, now)
+        complaints += 1
     conn.commit()
     return complaints
 
@@ -159,9 +178,10 @@ def has_checkout(reservation_id: int) -> bool:
 
 
 def has_food_complaint(reservation_id: int, first: str, last: str) -> bool:
-    """Quell'ospite e sceso in reception a lamentarsi per il cibo mancante."""
+    """Quell'ospite e sceso in reception a lamentarsi (cibo/servizio/tavoli)."""
     return get_conn().execute(
-        "SELECT 1 FROM reception WHERE reservation_id = ? AND kind = 'food'"
+        "SELECT 1 FROM reception WHERE reservation_id = ?"
+        " AND kind IN ('food', 'service', 'table')"
         " AND first_name = ? AND last_name = ? LIMIT 1",
         (reservation_id, first, last)).fetchone() is not None
 

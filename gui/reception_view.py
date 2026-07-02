@@ -46,8 +46,10 @@ class ReceptionWindow(tk.Toplevel):
             self._row(entry)
 
     LABELS = {"checkout": "Check-out", "checkin": "Check-in",
-              "food": "Reclamo cibo"}
-    BUTTONS = {"checkout": "Check-out", "checkin": "Check-in", "food": "Parla"}
+              "food": "Reclamo cibo", "service": "Reclamo servizio",
+              "table": "Reclamo tavoli"}
+    BUTTONS = {"checkout": "Check-out", "checkin": "Check-in",
+               "food": "Parla", "service": "Parla", "table": "Parla"}
 
     def _row(self, entry):
         kind = self.LABELS.get(entry["kind"], "Check-in")
@@ -70,7 +72,7 @@ class ReceptionWindow(tk.Toplevel):
             CheckoutView(self, reservations.get(entry["reservation_id"]),
                          on_done=lambda: (reception.remove(entry["id"]),
                                           self.on_change(), self._refresh()))
-        elif entry["kind"] == "food":
+        elif entry["kind"] in ("food", "service", "table"):
             FoodComplaintView(self, entry,
                               on_done=lambda: (reception.remove(entry["id"]),
                                                self.on_change(), self._refresh()))
@@ -81,20 +83,36 @@ class ReceptionWindow(tk.Toplevel):
 
 
 class FoodComplaintView(tk.Toplevel):
-    """L'ospite rimasto senza cibo si lamenta: una serie di messaggi che si
-    chiudono uno alla volta col tasto 'Scusati'. Finiti, torna in camera."""
+    """L'ospite rimasto a bocca asciutta si lamenta: una serie di messaggi che
+    si chiudono uno alla volta col tasto 'Scusati'. Finiti, torna in camera."""
 
-    MESSAGES = (
-        "Scusate, ero sceso per il pasto ma non c'e niente da mangiare!",
-        "Ho prenotato il trattamento coi pasti inclusi, e una vergogna.",
-        "Vi prego di rifornire la cucina al piu presto.",
-    )
+    MESSAGES = {
+        "food": (
+            "Scusate, ero sceso per il pasto ma non c'e niente da mangiare!",
+            "Ho prenotato il trattamento coi pasti inclusi, e una vergogna.",
+            "Vi prego di rifornire la cucina al piu presto.",
+        ),
+        "service": (
+            "Sono in sala da un'ora e nessuno e venuto a servirci!",
+            "Non c'e abbastanza personale, i tavoli sono abbandonati.",
+            "Assumete piu camerieri, cosi non si puo mangiare.",
+        ),
+        "table": (
+            "Siamo scesi a mangiare ma non c'e un tavolo libero per noi!",
+            "Non possiamo mica mangiare in piedi.",
+            "Comprate piu tavoli e sedie, la sala e minuscola.",
+        ),
+    }
+    TITLES = {"food": "Reclamo: manca il cibo",
+              "service": "Reclamo: servizio in sala",
+              "table": "Reclamo: nessun tavolo libero"}
 
     def __init__(self, master, entry, on_done):
         super().__init__(master)
         self.entry = entry
         self.on_done = on_done
-        self.title("Reclamo: manca il cibo")
+        self._msgs = self.MESSAGES.get(entry["kind"], self.MESSAGES["food"])
+        self.title(self.TITLES.get(entry["kind"], "Reclamo"))
         self.transient(master)
         self.grab_set()
         self._i = 0
@@ -108,13 +126,13 @@ class FoodComplaintView(tk.Toplevel):
         name = f"{self.entry['first_name']} {self.entry['last_name']}".strip()
         ttk.Label(self._body, text=f"{name} (Camera {self.entry['room_number']})",
                   font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-        ttk.Label(self._body, text=self.MESSAGES[self._i], wraplength=320,
+        ttk.Label(self._body, text=self._msgs[self._i], wraplength=320,
                   justify="left").pack(anchor="w", pady=(8, 12))
         ttk.Button(self._body, text="Scusati", command=self._next).pack()
 
     def _next(self):
         self._i += 1
-        if self._i >= len(self.MESSAGES):
+        if self._i >= len(self._msgs):
             self.on_done()
             self.destroy()
         else:

@@ -174,7 +174,8 @@ def reset_all() -> None:
     """Cancella tutto: alla riapertura il gestionale riparte dal primo avvio."""
     conn = get_conn()
     for table in ("reservation_guests", "reservations", "guests", "ledger",
-                  "mails", "reception", "blacklist", "meals_served", "rooms",
+                  "mails", "reception", "blacklist", "meals_served",
+                  "work_hours", "employees", "dining_tables", "rooms",
                   "settings"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()

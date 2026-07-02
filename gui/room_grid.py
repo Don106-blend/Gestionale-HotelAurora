@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import timedelta
 from tkinter import ttk
 
-from hotel import clock, constants, guest_state, guests, reservations, rooms
+from hotel import clock, constants, guest_state, guests, reservations, rooms, staff
 
 CELL_W = 108
 CELL_H = 46
@@ -89,6 +89,10 @@ class OccupancyGrid(_BaseGrid):
         self.canvas.create_text(x + 6, y + 12, anchor="w", text=title,
                                 font=("TkDefaultFont", 9, "bold"), tags=tag)
         self._draw_dots(descs, x, y, tag)
+        if staff.cleaner_in_room(number):    # pallino rosa: pulizie in corso
+            self.canvas.create_oval(x + CELL_W - 14, y + 4,
+                                    x + CELL_W - 4, y + 14,
+                                    fill="#f48fb1", outline="#333333", tags=tag)
         self.canvas.tag_bind(tag, "<Button-1>",
                              lambda _e, n=number: self.on_room_click(n))
 

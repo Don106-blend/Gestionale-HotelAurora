@@ -154,5 +154,7 @@ def clear_all() -> None:
     conn.execute("DELETE FROM reception")
     conn.execute("DELETE FROM blacklist")
     conn.execute("DELETE FROM meals_served")
+    conn.execute("DELETE FROM work_hours")   # i dipendenti restano assunti
+    conn.execute("UPDATE employees SET served = 0")
     conn.execute("UPDATE rooms SET dirty = 0, blocked = 0")
     conn.commit()
