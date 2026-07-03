@@ -16,6 +16,8 @@ STEP_THRESHOLD = 10
 FLOOR_COST = 10000.0
 MAX_ROOMS_PER_FLOOR = 50
 
+STARTING_BUDGET = 10000.0   # capitale con cui parte una nuova partita
+
 # Dispensa cibo (AllFoods!): 1 unita = 1 pasto servito.
 FOOD_UNIT_COST = 10.0
 FOOD_INITIAL = 50           # unita al primo avvio
@@ -39,6 +41,15 @@ def complete_setup(user_name: str, hotel_name: str) -> None:
     kv_set("user_name", user_name.strip() or "Direttore")
     kv_set("hotel_name", hotel_name.strip() or "HotelAurora")
     kv_set("setup_done", True)
+
+
+def grant_starting_capital() -> None:
+    """Accredita il capitale iniziale, una volta sola per partita."""
+    if kv_get("capital_granted", False):
+        return
+    budget.record(budget.INCOME, "Capitale iniziale", STARTING_BUDGET,
+                  "Fondo di partenza")
+    kv_set("capital_granted", True)
 
 
 def user_name() -> str:
@@ -80,13 +91,15 @@ def rooms_purchased() -> int:
 
 
 def room_cost(suite: bool = False) -> float:
+    from . import amenities   # differito: amenities usa estate._spend
     p = rooms_purchased()
     if p <= STEP_THRESHOLD:
         base = ROOM_BASE_COST + ROOM_STEP * p
     else:
         base = (ROOM_BASE_COST + ROOM_STEP * STEP_THRESHOLD
                 + ROOM_STEP_HIGH * (p - STEP_THRESHOLD))
-    return round(base * (2 if suite else 1), 2)
+    # camere migliorate/luxury: costruire (e vendere) costa di piu
+    return round(base * (2 if suite else 1) * amenities.price_mult(), 2)
 
 
 def _next_room_number(floor: int) -> int:
@@ -140,6 +153,10 @@ def run_utilities(today) -> float:
         return 0.0
     n_rooms = get_conn().execute("SELECT COUNT(*) FROM rooms").fetchone()[0]
     amount = round(UTILITY_BASE + UTILITY_PER_ROOM * n_rooms, 2)
+    # receptionist 'contabile' assunto: ottimizza le utenze (-20%)
+    if get_conn().execute("SELECT 1 FROM employees WHERE role = 'reception'"
+                          " AND bonus = 'contabile' LIMIT 1").fetchone():
+        amount = round(amount * 0.8, 2)
     budget.record(budget.LOSS, "Bollette", amount, f"Utenze {month}")
     return amount
 
@@ -212,6 +229,6 @@ def reset_all() -> None:
     for table in ("reservation_guests", "reservations", "guests", "ledger",
                   "mails", "reception", "blacklist", "meals_served",
                   "work_hours", "employees", "dining_tables", "reviews",
-                  "rooms", "settings"):
+                  "problems", "rooms", "settings"):
         conn.execute(f"DELETE FROM {table}")
     conn.commit()

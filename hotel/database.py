@@ -134,6 +134,14 @@ CREATE TABLE IF NOT EXISTS reviews (
     text  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS problems (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    key         TEXT NOT NULL,          -- voce del catalogo problemi
+    room_number INTEGER,                -- NULL = problema di un servizio/zona
+    created_at  TEXT NOT NULL,
+    resolved_at TEXT                    -- NULL = aperto; barrato se valorizzato
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -165,6 +173,15 @@ def get_conn() -> sqlite3.Connection:
         _seed_dining(_conn)
         _conn.commit()
     return _conn
+
+
+def close_conn() -> None:
+    """Chiude la connessione: serve per copiare il file .db (import/export)."""
+    global _conn
+    if _conn is not None:
+        _conn.commit()
+        _conn.close()
+        _conn = None
 
 
 def kv_get(key: str, default=None):
@@ -204,6 +221,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "wear" not in room_cols:           # usura: check-out dall'ultimo rinnovo
         conn.execute("ALTER TABLE rooms ADD COLUMN wear INTEGER"
                      " NOT NULL DEFAULT 0")
+    emp_cols = [r[1] for r in conn.execute("PRAGMA table_info(employees)")]
+    for col, ddl in (("bonus", "TEXT NOT NULL DEFAULT ''"),      # receptionist
+                     ("contract", "TEXT NOT NULL DEFAULT 'full'"),
+                     ("contract_until", "TEXT"),
+                     ("permanent", "INTEGER NOT NULL DEFAULT 1")):
+        if col not in emp_cols:
+            conn.execute(f"ALTER TABLE employees ADD COLUMN {col} {ddl}")
+    rc_cols = [r[1] for r in conn.execute("PRAGMA table_info(reception)")]
+    if "note" not in rc_cols:       # testo del problema raccontato al banco
+        conn.execute("ALTER TABLE reception ADD COLUMN note TEXT"
+                     " NOT NULL DEFAULT ''")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:

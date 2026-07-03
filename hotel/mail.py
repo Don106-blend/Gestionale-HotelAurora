@@ -18,7 +18,7 @@ rng = random.Random()
 
 @dataclass
 class MailConfig:
-    enabled: bool = False
+    enabled: bool = True                 # richieste attive di default
     block_new_bookings: bool = False     # blocca l'arrivo di nuove prenotazioni
     interval_seconds: int = 60
     probability: float = 0.5
@@ -33,6 +33,12 @@ class MailConfig:
 config = MailConfig()
 
 
+def reset_config() -> None:
+    """Riporta la config email ai default (nuova partita)."""
+    global config
+    config = MailConfig()
+
+
 def shift_probability() -> float:
     """Probabilita mail del turno corrente (standard se non specificata)."""
     return config.shift_probability.get(clock.shift()[0], config.probability)
@@ -44,9 +50,10 @@ SEASON_FACTOR = {1: 0.7, 2: 0.6, 3: 0.8, 4: 1.0, 5: 1.1, 6: 1.3,
 
 
 def demand_factor() -> float:
-    """Moltiplicatore del flusso prenotazioni: stagione x reputazione."""
-    from . import reviews
-    return SEASON_FACTOR[clock.today().month] * reviews.demand_factor()
+    """Flusso prenotazioni: stagione x reputazione x categoria dell'hotel."""
+    from . import amenities, reviews
+    return (SEASON_FACTOR[clock.today().month] * reviews.demand_factor()
+            * amenities.tier_factor())
 
 # Template in tono naturale. Placeholder: name, email, pax, guests, nights,
 # checkin, checkout, board. Aggiungere un template = aggiungere una stringa.
@@ -90,9 +97,11 @@ def _pick_returning_guest():
     dalla reputazione: chi si e trovato male non torna) ed esclude chi ha gia
     una prenotazione programmata (stesso nome): niente doppioni.
     """
-    from . import reviews
-    if rng.random() >= config.returning_probability * (reviews.reputation()
-                                                       / reviews.STARS_MAX):
+    from . import reviews, staff
+    p = config.returning_probability * reviews.reputation() / reviews.STARS_MAX
+    if staff.employed_bonus("carismatico"):
+        p *= 1.5
+    if rng.random() >= p:
         return None
     rows = get_conn().execute(
         "SELECT DISTINCT first_name, last_name FROM guests g"
@@ -247,12 +256,16 @@ def insert(mail_id: int) -> int:
     free = reservations.available_rooms(checkin, checkout)
     if not free:
         raise reservations.ValidationError("Nessuna camera libera nel periodo.")
+    from . import staff  # prezzo di mercato + eventuale poliglotta di turno
+    price = reservations.price_for(m["board"])
+    if staff.on_duty_bonus("poliglotta", clock.now()):
+        price = round(price * 1.1, 2)
     room = rng.choice(free)
     reservations.create_reservation(
         first_name=m["first_name"], last_name=m["last_name"],
         room_number=room["number"], checkin=checkin, checkout=checkout,
         adults=m["adults"], children=m["children"],
-        price_per_night=DEFAULT_BOARD_PRICES[m["board"]], board=m["board"],
+        price_per_night=price, board=m["board"],
         discount=None, phone="", email=m["sender"], color="",
         comments=f"Da email: {m['sender']}")
     get_conn().execute("UPDATE mails SET inserted = 1 WHERE id = ?", (mail_id,))

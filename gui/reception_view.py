@@ -4,7 +4,7 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import ttk
 
-from hotel import clock, reception, reservations
+from hotel import clock, reception, reservations, staff
 
 from .checkout_view import CheckoutView
 
@@ -16,7 +16,10 @@ class ReceptionWindow(tk.Toplevel):
         super().__init__(master)
         self.on_change = on_change or (lambda: None)
         self.title("Reception")
-        self.geometry("520x360")
+        self.geometry("520x380")
+        self.desk_lbl = ttk.Label(self, padding=(12, 8, 12, 0),
+                                  font=("TkDefaultFont", 9, "italic"))
+        self.desk_lbl.pack(anchor="w")
         self._body = ttk.Frame(self, padding=12)
         self._body.pack(fill="both", expand=True)
         self._sig = None
@@ -29,6 +32,11 @@ class ReceptionWindow(tk.Toplevel):
     def _refresh(self):
         if not self.winfo_exists():
             return
+        rec = staff.receptionist_on_duty(clock.now())
+        self.desk_lbl.config(text=(
+            "Al banco: nessun receptionist" if rec is None else
+            f"Al banco: {rec['first_name']} {rec['last_name']}"
+            f" ({staff.BONUSES[rec['bonus']][0]})"))
         rows = reception.pending()
         # ridisegna solo quando cambia qualcosa (niente flicker ogni secondo)
         sig = tuple((e["id"], self._late(e)) for e in rows)
@@ -47,9 +55,10 @@ class ReceptionWindow(tk.Toplevel):
 
     LABELS = {"checkout": "Check-out", "checkin": "Check-in",
               "food": "Reclamo cibo", "service": "Reclamo servizio",
-              "table": "Reclamo tavoli"}
+              "table": "Reclamo tavoli", "problem": "Problema"}
     BUTTONS = {"checkout": "Check-out", "checkin": "Check-in",
-               "food": "Parla", "service": "Parla", "table": "Parla"}
+               "food": "Parla", "service": "Parla", "table": "Parla",
+               "problem": "Parla"}
 
     def _row(self, entry):
         kind = self.LABELS.get(entry["kind"], "Check-in")
@@ -72,7 +81,7 @@ class ReceptionWindow(tk.Toplevel):
             CheckoutView(self, reservations.get(entry["reservation_id"]),
                          on_done=lambda: (reception.remove(entry["id"]),
                                           self.on_change(), self._refresh()))
-        elif entry["kind"] in ("food", "service", "table"):
+        elif entry["kind"] in ("food", "service", "table", "problem"):
             FoodComplaintView(self, entry,
                               on_done=lambda: (reception.remove(entry["id"]),
                                                self.on_change(), self._refresh()))
@@ -105,13 +114,19 @@ class FoodComplaintView(tk.Toplevel):
     }
     TITLES = {"food": "Reclamo: manca il cibo",
               "service": "Reclamo: servizio in sala",
-              "table": "Reclamo: nessun tavolo libero"}
+              "table": "Reclamo: nessun tavolo libero",
+              "problem": "Problema segnalato"}
 
     def __init__(self, master, entry, on_done):
         super().__init__(master)
         self.entry = entry
         self.on_done = on_done
-        self._msgs = self.MESSAGES.get(entry["kind"], self.MESSAGES["food"])
+        if entry["kind"] == "problem":     # testo del guaio raccontato
+            self._msgs = (entry["note"] or "C'e un problema, venite a vedere!",
+                          "Vi prego di sistemarlo al piu presto.")
+        else:
+            self._msgs = self.MESSAGES.get(entry["kind"],
+                                           self.MESSAGES["food"])
         self.title(self.TITLES.get(entry["kind"], "Reclamo"))
         self.transient(master)
         self.grab_set()

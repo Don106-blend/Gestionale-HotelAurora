@@ -4,8 +4,8 @@ import random
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import (clock, estate, mail, persistence, reception, reservations,
-                   staff)
+from hotel import (amenities, clock, estate, mail, persistence, problems,
+                   reception, reservations, staff, taxes)
 
 from .booking_form import BookingForm
 from .browser import BrowserPage
@@ -17,11 +17,13 @@ from .mail_view import MailView
 from .reception_view import ReceptionWindow
 from .reports import ReportWindow
 from .room_dialog import RoomDialog
+from .reception_staff import FirstReceptionistDialog
 from .room_grid import OccupancyGrid, RoomGrid
 from .setup_dialog import SetupDialog
 from .staff_view import StaffWindow
 from .time_view import TimeWindow
 from .timeline import Timeline
+from .todo_view import TodoWindow
 
 
 class HotelApp(tk.Tk):
@@ -37,7 +39,11 @@ class HotelApp(tk.Tk):
         persistence.load()       # ripristina lo stato di gioco salvato
         if not estate.is_setup_done():        # primo avvio: configura l'hotel
             self.wait_window(SetupDialog(self))
+        estate.grant_starting_capital()  # 10.000 di partenza (una tantum)
         staff.ensure_seed()      # personale di partenza (1 pulizie + 2 sala)
+        from hotel.database import kv_get
+        if not kv_get("rec_chosen", False):   # primo avvio: 1 receptionist su 4
+            self.wait_window(FirstReceptionistDialog(self))
         self.title(f"{estate.hotel_name()} - HotelAurora")
         self._build()
         self._last_shown_day = clock.today()
@@ -70,12 +76,15 @@ class HotelApp(tk.Tk):
                        ).pack(side="left", padx=2)
         ttk.Button(toolbar, text="Aggiorna",
                    command=self.refresh).pack(side="right", padx=2)
-        ttk.Button(toolbar, text="Debug",
+        ttk.Button(toolbar, text="Impostazioni",
                    command=self._open_debug).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Budget",
                    command=lambda: BudgetWindow(self)).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Dipendenti",
                    command=lambda: StaffWindow(self, on_change=self.refresh)
+                   ).pack(side="right", padx=2)
+        ttk.Button(toolbar, text="To Do",
+                   command=lambda: TodoWindow(self, on_change=self.refresh)
                    ).pack(side="right", padx=2)
         ttk.Button(toolbar, text="Reception",
                    command=self._open_reception).pack(side="right", padx=2)
@@ -204,8 +213,9 @@ class HotelApp(tk.Tk):
         cfg = mail.config
         factor = clock.freq_factor()
         if cfg.enabled and not cfg.block_new_bookings and factor > 0:
-            # probabilita per turno (notte rarissima) x stagione x reputazione
+            # prob. per turno x stagione x reputazione x receptionist di turno
             rate = (mail.shift_probability() * mail.demand_factor()
+                    * staff.mail_boost(clock.now())
                     / max(cfg.interval_seconds, 1) * factor)
             if random.random() < min(rate, 1.0):
                 self.spawn_mail()
@@ -246,8 +256,15 @@ class HotelApp(tk.Tk):
             changed += reception.serve_meals(now)         # consumo cibo / reclami
             changed += reservations.auto_checkout_overstayers(now)  # uscite d'ufficio
             changed += reception.room_service(now)   # ordini in camera
+            reception.bar_tick(now)                  # bonus barista
+            changed += reception.auto_desk(now)      # bonus autonomo
+            changed += problems.tick(now)  # guai nuovi, tuttofare, pulizia To Do
             changed += staff.tick(now)   # pulizie simulate, ore sala, stipendi
             if estate.run_utilities(now.date()):     # bollette a inizio mese
+                changed += 1
+            if taxes.settle(now.date()):    # IVA maturata + rate prestiti
+                changed += 1
+            if amenities.accrue_passive(now):        # casino / luci rosse
                 changed += 1
             if changed:
                 self.refresh()

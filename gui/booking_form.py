@@ -77,12 +77,20 @@ class BookingForm(tk.Toplevel):
         self.room_combo.grid(row=9, column=1, sticky="w", pady=2)
         self._refresh_rooms(preselect=room_number)
 
-        add_entry("Prezzo per notte", "price", 10, "0", width=10)
-
         ttk.Label(frame, text="Soluzione").grid(row=11, column=0, sticky="w")
-        self.board_combo = ttk.Combobox(frame, width=21, values=BOARD_CHOICES)
+        self.board_combo = ttk.Combobox(frame, width=21, values=BOARD_CHOICES,
+                                        state="readonly")
         self.board_combo.set(BOARD_CHOICES[0])
         self.board_combo.grid(row=11, column=1, sticky="w", pady=2)
+        self.board_combo.bind("<<ComboboxSelected>>",
+                              lambda _e: self._update_price())
+
+        # il prezzo per notte e di mercato: lo decide il listino, non il banco
+        ttk.Label(frame, text="Prezzo per notte").grid(row=10, column=0,
+                                                       sticky="w")
+        self.price_lbl = ttk.Label(frame)
+        self.price_lbl.grid(row=10, column=1, sticky="w", pady=2)
+        self._update_price()
 
         add_entry("Sconto %", "discount", 12, "", width=6)
 
@@ -110,6 +118,14 @@ class BookingForm(tk.Toplevel):
                    command=self.destroy).pack(side="left", padx=4)
 
     # -- sincronizzazione date/notti e camere disponibili ------------------
+
+    def _board(self) -> str:
+        return self.board_combo.get().split()[0].strip().upper()
+
+    def _update_price(self):
+        self.price_lbl.config(
+            text=f"€ {reservations.price_for(self._board()):.2f}"
+                 "  (prezzo di mercato)")
 
     def _dates(self):
         checkin = parse_date_it(self.vars["checkin"].get())
@@ -181,11 +197,11 @@ class BookingForm(tk.Toplevel):
                                  parent=self)
             return
         room_number = int(room_text.split()[0])
-        board = self.board_combo.get().split()[0].strip().upper()
+        board = self._board()
+        price = reservations.price_for(board)   # prezzo di mercato
         try:
             adults = int(self.vars["adults"].get())
             children = int(self.vars["children"].get())
-            price = float(self.vars["price"].get().replace(",", ".") or 0)
             discount_text = self.vars["discount"].get().strip()
             discount = (float(discount_text.replace(",", "."))
                         if discount_text else None)

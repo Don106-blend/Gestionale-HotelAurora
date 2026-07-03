@@ -41,9 +41,8 @@ def _band(stars: int) -> int:
     return 0
 
 
-def _add(guest: str, stars: int) -> None:
+def _insert(guest: str, stars: int, text: str) -> None:
     stars = max(0, min(STARS_MAX, stars))
-    text = random.Random(f"{guest}:{stars}").choice(TEXTS[_band(stars)])
     conn = get_conn()
     conn.execute("INSERT INTO reviews (day, guest, stars, text)"
                  " VALUES (?, ?, ?, ?)",
@@ -51,15 +50,56 @@ def _add(guest: str, stars: int) -> None:
     conn.commit()
 
 
-def leave_review(res, paid: bool = True) -> None:
-    """Recensione a fine soggiorno: parte da 5, -2 a reclamo, -1 se non paga."""
-    stars = STARS_MAX - 2 * res["complaints"] - (0 if paid else 1)
-    _add(f"{res['first_name']} {res['last_name']}".strip(), stars)
+def _add(guest: str, stars: int) -> None:
+    """Scrittura diretta (debug/test): testo generico della fascia."""
+    stars = max(0, min(STARS_MAX, stars))
+    _insert(guest, stars,
+            random.Random(f"{guest}:{stars}").choice(TEXTS[_band(stars)]))
+
+
+# testi legati ai receptionist (memorabile / pappamolle / truffatore)
+REC_POSITIVE = ("Il receptionist e stato eccezionale, che accoglienza!",
+                "Alla reception ci hanno trattati come re. Torneremo.",
+                "Check-out indimenticabile, personale d'oro.")
+REC_NEGATIVE = ("Al check-out il conto era gonfiato, mi sento truffato.",
+                "Prezzi lievitati al momento di pagare. Vergogna.",
+                "Il receptionist ci ha spennati, mai piu.")
+
+
+def leave_checkout(guest: str, stars: int, force: str | None = None) -> bool:
+    """Recensione di fine soggiorno. Le recensioni POSITIVE (4-5 stelle)
+    escono solo se c'e qualcosa da lodare: un servizio dell'hotel o un
+    receptionist (force='positive'/'negative'). Le negative escono sempre.
+    Ritorna True se la recensione e stata lasciata."""
+    from . import amenities
+    r = random.Random(f"{guest}:{stars}")
+    if force == "positive":
+        _insert(guest, max(stars, 4), r.choice(REC_POSITIVE))
+        return True
+    if force == "negative":
+        _insert(guest, min(stars, 2), r.choice(REC_NEGATIVE))
+        return True
+    themed = amenities.random_review_text(r, stars)
+    if stars >= 4 and themed is None:
+        return False          # niente da lodare: l'ospite non recensisce
+    _insert(guest, stars, themed or r.choice(TEXTS[_band(stars)]))
+    return True
 
 
 def leave_angry(res) -> None:
     """Chi annulla arrabbiato per l'attesa al check-in lascia 0 stelle."""
     _add(f"{res['first_name']} {res['last_name']}".strip(), 0)
+
+
+EMOTION_NEG = "Camera con problemi mai risolti: {emo} per tutto il soggiorno."
+EMOTION_POS = "Che soggiorno particolare: mi sono sentito {emo} tutto il tempo!"
+
+
+def leave_emotion(guest: str, emotion: str, positive: bool) -> None:
+    """Recensione legata all'emozione lasciata da un problema in camera."""
+    template = EMOTION_POS if positive else EMOTION_NEG
+    _insert(guest, 5 if positive else 1,
+            template.format(emo=emotion.lower()))
 
 
 def all_reviews(limit: int = 100):
@@ -68,11 +108,12 @@ def all_reviews(limit: int = 100):
 
 
 def reputation() -> float:
-    """Media stelle delle ultime WINDOW recensioni (5.0 senza recensioni)."""
+    """Media stelle delle ultime WINDOW recensioni (3.0 senza recensioni:
+    un hotel nuovo parte anonimo, ne osannato ne bocciato)."""
     row = get_conn().execute(
         "SELECT AVG(stars) FROM (SELECT stars FROM reviews"
         " ORDER BY id DESC LIMIT ?)", (WINDOW,)).fetchone()
-    return round(row[0], 1) if row[0] is not None else 5.0
+    return round(row[0], 1) if row[0] is not None else 3.0
 
 
 def demand_factor() -> float:

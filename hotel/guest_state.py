@@ -238,15 +238,18 @@ def absence_location(row, now: datetime):
 
 def describe(row, now: datetime) -> dict:
     """Riga tabella: nome, stato, locazione, emozione, bisogno, colore."""
+    from . import problems   # import differito: evita il ciclo
     out = absence_location(row, now)
     if out is not None:
         st, loc = "Assente", out
     else:
         st = stato(row["id"], now)
         loc = locazione(st, row["id"], now)
+    # un problema aperto in camera cambia l'umore di chi ci vive
+    emo = problems.emotion_for_reservation(row["reservation_id"]) or "N/A"
     return {"name": f"{row['first_name']} {row['last_name']}".strip(),
             "stato": st, "locazione": loc,
-            "emozione": "N/A", "bisogno": "N/A", "color": COLORS[st]}
+            "emozione": emo, "bisogno": "N/A", "color": COLORS[st]}
 
 
 def sleep_base_str(guest_id: int) -> str:

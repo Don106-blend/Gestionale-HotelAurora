@@ -17,9 +17,10 @@ database.DB_PATH = Path(tempfile.gettempdir()) / "hotel_aurora_smoke.db"
 if database.DB_PATH.exists():
     os.remove(database.DB_PATH)
 
-from hotel import (billing, budget, cleaning, clock, constants, debug_seed,
-                   guest_state, guests, mail, meals, persistence, reception,
-                   reservations, reviews, rooms, staff)
+from hotel import (amenities, bank, billing, budget, cleaning, clock,
+                   constants, debug_seed, guest_state, guests, mail, meals,
+                   persistence, problems, reception, reservations, reviews,
+                   rooms, staff, taxes)
 
 staff.SICK_PROB = 0.0   # malattie testate a parte: qui tutto deterministico
 
@@ -237,11 +238,13 @@ check("camera partita resta nel foglio pulizie del giorno di check-out",
 check("prenotazione checked_out sparisce dalla timeline",
       res_id not in {r["id"] for r in reservations.in_range(today, d(5))})
 
-# il check-out alimenta il budget: 3 notti x 85 = 255 netto, IVA 56.10
+# il check-out incassa il 100% del ricavato (311.10); l'IVA si accantona
 bt = budget.totals()
-check("budget: introito netto al check-out", bt["income"] == 255.0)
-check("budget: perdita IVA al check-out", bt["loss"] == 56.10)
-check("budget: saldo = introiti - perdite", bt["balance"] == 198.90)
+check("budget: introito 100% del ricavato al check-out",
+      bt["income"] == 311.10)
+check("budget: IVA accantonata, non a perdite",
+      bt["loss"] == 0.0 and taxes.vat_due() == 56.10)
+check("budget: saldo = introiti - perdite", bt["balance"] == 311.10)
 
 # bilanciamento operatori: 30 camere in check-out = 15h -> 2 operatori
 for i in range(5, 27):
@@ -426,6 +429,8 @@ check("email mittente senza spazi (cognomi composti)",
 # ospiti abituali: riuso del DB ospiti, niente doppioni
 debug_seed.clear_all()
 mail.config.auto_insert = False
+for _ in range(3):        # rating 5: il fattore reputazione non taglia i riusi
+    reviews._add("Fan Sfegatato", 5)
 guests.upsert({"first_name": "Anna", "last_name": "Bianchi",
                "birth_date": "01/01/1990"})
 mail.config.returning_probability = 1.0
@@ -1133,16 +1138,16 @@ database.get_conn().commit()
 
 # --- recensioni e reputazione ---------------------------------------------------
 debug_seed.clear_all()
-check("recensioni: reputazione 5.0 senza recensioni",
-      reviews.reputation() == 5.0)
+check("recensioni: rating di partenza 3.0 (hotel anonimo)",
+      reviews.reputation() == 3.0)
 rid_r1 = reservations.create_reservation(
     first_name="Feli", last_name="Cissimo", room_number=101, checkin=d(-2),
     checkout=today, adults=1, children=0, price_per_night=80, board="RO",
     discount=None, phone="", email="", color="", comments="")
 reservations.checkin_guest(rid_r1, {"first_name": "Feli", "last_name": "Cissimo"})
 reservations.do_checkout(rid_r1)
-check("recensioni: soggiorno senza reclami -> 5 stelle",
-      reviews.all_reviews()[0]["stars"] == 5)
+check("recensioni: senza servizi ne receptionist il felice NON recensisce",
+      len(reviews.all_reviews()) == 0)
 
 rid_r2 = reservations.create_reservation(
     first_name="Delu", last_name="So", room_number=102, checkin=d(-2),
@@ -1152,8 +1157,9 @@ reservations.checkin_guest(rid_r2, {"first_name": "Delu", "last_name": "So"})
 reception._bump_complaints(rid_r2)
 reception._bump_complaints(rid_r2)
 reservations.do_checkout(rid_r2)
-check("recensioni: 2 reclami -> 1 stella",
+check("recensioni: 2 reclami -> 1 stella (le negative escono sempre)",
       reviews.all_reviews()[0]["stars"] == 1)
+reviews._add("Contrappeso", 5)
 check("reputazione: media delle recensioni", reviews.reputation() == 3.0)
 check("reputazione: demand_factor da 0.4 a 1.0",
       reviews.demand_factor() == round(0.4 + 0.12 * 3.0, 2))
@@ -1164,10 +1170,12 @@ check("recensioni: arrabbiato -> 0 stelle",
 # stagionalita: la domanda cambia col mese (x reputazione)
 clock.set_now(datetime(2026, 7, 15, 10))
 check("stagione: luglio pieno (x1.5)",
-      mail.demand_factor() == 1.5 * reviews.demand_factor())
+      mail.demand_factor()
+      == 1.5 * reviews.demand_factor() * amenities.tier_factor())
 clock.set_now(datetime(2026, 11, 15, 10))
 check("stagione: novembre morto (x0.6)",
-      mail.demand_factor() == 0.6 * reviews.demand_factor())
+      mail.demand_factor()
+      == 0.6 * reviews.demand_factor() * amenities.tier_factor())
 clock.set_now(None)
 
 # --- usura camere ----------------------------------------------------------------
@@ -1268,6 +1276,560 @@ check("room service: dispensa vuota -> reclamo cibo",
       and any(e["kind"] == "food" for e in reception.pending()))
 check("room service: il reclamo pesa sulla recensione",
       reservations.get(rid_rs)["complaints"] == 1)
+
+# --- categoria (tier) e servizi ------------------------------------------------
+debug_seed.clear_all()
+database.kv_set("amenities", [])
+database.kv_set("room_level", 0)
+check("tier: si parte da 1 stella", amenities.tier() == 1)
+check("tier: fattore domanda 0.85 a 1 stella", amenities.tier_factor() == 0.85)
+budget.record(budget.INCOME, "TestTier", 500000)
+
+check("servizi: sconosciuto rifiutato",
+      _raises(lambda: amenities.buy("sauna")))
+amenities.buy("wifi")
+check("servizi: wifi posseduto", "wifi" in amenities.owned())
+check("servizi: doppio acquisto rifiutato",
+      _raises(lambda: amenities.buy("wifi")))
+check("tier: 12+ camere e wifi -> 2 stelle",
+      len(rooms.all_rooms()) >= 12 and amenities.tier() == 2)
+
+amenities.buy("snackbar")
+amenities.buy("lobby")
+_n = 301
+while len(rooms.all_rooms()) < 16:      # camere extra per la 3a stella
+    database.get_conn().execute(
+        "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+        " VALUES (?, 3, 0, 2, 1)", (_n,))
+    _n += 1
+database.get_conn().commit()
+check("tier: 16 camere + ristoro + reception -> 3 stelle",
+      amenities.tier() == 3)
+
+check("upgrade: luxury prima di migliorate rifiutato",
+      _raises(lambda: amenities.buy_room_upgrade(2)))
+amenities.buy("pool")
+amenities.buy("meeting")
+check("upgrade: costo scala con le camere",
+      amenities.room_upgrade_cost(1) == round(350.0 * len(rooms.all_rooms()), 2))
+amenities.buy_room_upgrade(1)
+check("upgrade: camere migliorate -> prezzi x1.5",
+      amenities.price_mult() == 1.5)
+while len(rooms.all_rooms()) < 22:
+    database.get_conn().execute(
+        "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+        " VALUES (?, 3, 0, 2, 1)", (_n,))
+    _n += 1
+database.get_conn().commit()
+check("tier: 22 camere + piscina + riunioni + migliorate -> 4 stelle",
+      amenities.tier() == 4)
+
+amenities.buy("casino")
+amenities.buy("redlight")
+amenities.buy_room_upgrade(2)
+while len(rooms.all_rooms()) < 30:
+    database.get_conn().execute(
+        "INSERT INTO rooms (number, floor, is_suite, max_adults, max_children)"
+        " VALUES (?, 3, 0, 2, 1)", (_n,))
+    _n += 1
+database.get_conn().commit()
+check("tier: 30 camere + casino + luxury -> 5 stelle", amenities.tier() == 5)
+check("tier: fattore domanda 1.45 a 5 stelle", amenities.tier_factor() == 1.45)
+check("tier: a 5 stelle niente obiettivi", amenities.missing_for_next() == [])
+
+# il livello camere muove i costi di costruzione e i prezzi delle mail
+database.kv_set("rooms_purchased", 0)
+check("upgrade: costo camera 1000 x2.5 con luxury", estate.room_cost() == 2500.0)
+mail.config.auto_insert = False
+mid_lux = mail.spawn()
+m_lux = mail.get(mid_lux)
+room_lux = mail.insert(mid_lux)
+res_lux = reservations.arrival_on(room_lux,
+                                  date.fromisoformat(m_lux["checkin"]))
+check("upgrade: prezzo per notte delle mail x2.5",
+      res_lux["price_per_night"]
+      == round(debug_seed.DEFAULT_BOARD_PRICES[m_lux["board"]] * 2.5, 2))
+
+# recensioni positive SOLO se citano servizi (o receptionist)
+for _i in range(40):
+    reviews.leave_checkout(f"Recensore{_i}", 5)
+themed = {txt for pair in amenities.REVIEW_TEXTS.values() for txt in pair}
+posted = [r for r in reviews.all_reviews(100) if r["stars"] == 5]
+check("recensioni: qualche positiva esce citando i servizi",
+      0 < len(posted) < 40)
+check("recensioni: tutte le positive citano un servizio",
+      all(r["text"] in themed for r in posted))
+
+# entrate passive: casino di giorno, + luci rosse di notte
+rid_pa = reservations.create_reservation(
+    first_name="Gioca", last_name="Tore", room_number=101, checkin=d(-1),
+    checkout=d(2), adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_pa, {"first_name": "Gioca", "last_name": "Tore"})
+database.kv_set("passive_last", None)
+check("passivo: casino di giorno (2 a ospite/ora)",
+      amenities.accrue_passive(datetime(2026, 7, 10, 15, 0)) == 2.0)
+check("passivo: stessa ora non rimatura",
+      amenities.accrue_passive(datetime(2026, 7, 10, 15, 40)) == 0.0)
+check("passivo: di notte casino + luci rosse (2+4)",
+      amenities.accrue_passive(datetime(2026, 7, 10, 23, 30)) == 6.0)
+debug_seed.clear_all()
+database.kv_set("passive_last", None)
+check("passivo: senza ospiti nessun incasso",
+      amenities.accrue_passive(datetime(2026, 7, 11, 15, 0)) == 0.0)
+
+# --- receptionist: candidature, contratti, turni ------------------------------------
+debug_seed.clear_all()
+database.kv_set("rec_schedule", {})
+database.kv_set("cand_taken", [])
+database.kv_set("rec_logged", None)
+budget.record(budget.INCOME, "TestRec", 100000)
+
+c1 = staff.candidates()
+check("rec: 3 candidature a settimana", len(c1) == 3)
+check("rec: candidature stabili nella settimana",
+      [c["key"] for c in staff.candidates()] == [c["key"] for c in c1])
+check("rec: 4 scelte stabili al primo avvio",
+      staff.first_candidates() == staff.first_candidates()
+      and len(staff.first_candidates()) == 4)
+
+rec1 = staff.hire_candidate(c1[0]["key"], "part")
+check("rec: part-time assunto a 7/h",
+      staff.get(rec1)["contract"] == "part"
+      and staff.get(rec1)["hourly"] == 7.0)
+check("rec: candidatura consumata",
+      all(c["key"] != c1[0]["key"] for c in staff.candidates()))
+check("rec: contratto in prova (non indeterminato)",
+      staff.get(rec1)["permanent"] == 0)
+rec2 = staff.hire_receptionist("Neri", "Nero", "brutto_muso", "nero")
+check("rec: in nero pagato 9/h flat", staff.get(rec2)["hourly"] == 9.0)
+
+# turni: oggi bloccato, limiti orari e giorni del contratto
+today_wd = clock.today().weekday()
+days = [dd for dd in range(7) if dd != today_wd]
+check("rec: il giorno corrente non si tocca",
+      _raises(lambda: staff.set_shift(rec1, today_wd, "7-11")))
+staff.set_shift(rec1, days[0], "7-11")
+check("rec: turno salvato",
+      staff.schedule()[str(rec1)][str(days[0])] == "7-11")
+check("rec: blocco 8h vietato al part-time",
+      _raises(lambda: staff.set_shift(rec1, days[1], "7-15")))
+for dd in days[1:5]:
+    staff.set_shift(rec1, dd, "7-11")
+check("rec: oltre le 20h/settimana vietato",
+      _raises(lambda: staff.set_shift(rec1, days[5], "7-11")))
+staff.set_shift(rec2, days[0], "7-15")
+staff.set_shift(rec2, days[1], "15-23")
+check("rec: in nero massimo 2 giorni",
+      _raises(lambda: staff.set_shift(rec2, days[2], "7-15")))
+
+# di turno adesso? (incluso il turno a cavallo della mezzanotte)
+day0 = today + timedelta(days=(days[0] - today_wd) % 7)
+day1 = today + timedelta(days=(days[1] - today_wd) % 7)
+t_rec = datetime.combine(day0, time(8, 0))
+check("rec: di turno alle 8", any(
+    e["id"] == rec1 for e in staff.on_duty_receptionists(t_rec)))
+check("rec: bonus di turno rilevato",
+      staff.on_duty_bonus("brutto_muso", t_rec))
+check("rec: alle 5 nessuno al banco",
+      staff.on_duty_receptionists(datetime.combine(day0, time(5, 0))) == [])
+rec3 = staff.hire_receptionist("Not", "Turno", "animale_notturno", "full")
+staff.set_shift(rec3, days[1], "23-7")
+check("rec: turno notturno prima di mezzanotte",
+      staff._shift_at(rec3, datetime.combine(day1, time(23, 30))) == "23-7")
+after_mid = datetime.combine(day1 + timedelta(days=1), time(3, 0))
+check("rec: turno notturno dopo mezzanotte", staff._shift_at(rec3, after_mid))
+check("rec: animale notturno x3 mail di notte",
+      staff.mail_boost(after_mid) == 3.0)
+
+# ore: accreditate una volta a turno; insonne paga meta di notte
+staff.reception_tick(t_rec)
+check("rec: ore del turno accreditate (part 4h)",
+      staff.unpaid_hours(rec1) == 4.0)
+staff.reception_tick(t_rec + timedelta(hours=1))
+check("rec: nessun doppio accredito", staff.unpaid_hours(rec1) == 4.0)
+rec4 = staff.hire_receptionist("In", "Sonne", "insonne", "part")
+staff.set_shift(rec4, days[1], "23-3")
+staff.reception_tick(datetime.combine(day1, time(23, 30)))
+check("rec: insonne, ore notturne a meta", staff.unpaid_hours(rec4) == 2.0)
+# sfruttabile: puo superare il limite ma l'extra non si paga
+rec5 = staff.hire_receptionist("Sfru", "Ttato", "sfruttabile", "full")
+for dd in days:      # 6 turni da 8h = 48h <= 40+8
+    staff.set_shift(rec5, dd, "7-15")
+check("rec: sfruttabile pianifica 48h", True)
+staff.log_hours(rec5, day0, 40.0)      # limite base gia raggiunto
+staff.reception_tick(t_rec + timedelta(minutes=5))
+check("rec: le ore extra dello sfruttabile sono gratis",
+      staff.unpaid_hours(rec5) == 40.0)
+
+# fine contratto: deterministico, o se ne va o diventa indeterminato
+database.get_conn().execute(
+    "UPDATE employees SET contract_until = ? WHERE id IN (?, ?)",
+    (d(-1).isoformat(), rec1, rec2))
+database.get_conn().commit()
+expected_quit = {e for e in (rec1, rec2)
+                 if random.Random(f"quit:{e}").random() < staff.QUIT_PROB}
+staff.contracts_tick(today)
+ok_contract = all(
+    (staff.get(e) is None) == (e in expected_quit)
+    and (e in expected_quit or staff.get(e)["permanent"] == 1)
+    for e in (rec1, rec2))
+check("rec: a fine prova se ne va o diventa indeterminato", ok_contract)
+
+# --- bonus al check-out --------------------------------------------------------------
+def _co_res(room):
+    rid = reservations.create_reservation(
+        first_name="Pay", last_name=f"Er{room}", room_number=room,
+        checkin=d(-2), checkout=today, adults=1, children=0,
+        price_per_night=100, board="RO", discount=None, phone="", email="",
+        color="", comments="")
+    reservations.checkin_guest(rid, {"first_name": "Pay",
+                                     "last_name": f"Er{room}"})
+    return rid
+
+def _last_stay_income():
+    rows = [e for e in budget.entries()
+            if e["kind"] == "income" and e["category"] == "Soggiorno"]
+    return rows[-1]["amount"]
+
+# conto base: 2 notti x 100 = 200 + IVA 44 = 244 (si incassa il totale)
+reservations.do_checkout(_co_res(101), receptionist={"bonus": "persuasore"})
+check("bonus: persuasore incassa 1.25x", _last_stay_income() == 305.0)
+reservations.do_checkout(_co_res(102), receptionist={"bonus": "truffatore"})
+check("bonus: truffatore incassa 1.5x", _last_stay_income() == 366.0)
+check("bonus: truffatore -> recensione negativa",
+      reviews.all_reviews()[0]["stars"] <= 2
+      and reviews.all_reviews()[0]["text"] in reviews.REC_NEGATIVE)
+reservations.do_checkout(_co_res(103), receptionist={"bonus": "pappamolle"})
+check("bonus: pappamolle incassa 0.75x", _last_stay_income() == 183.0)
+check("bonus: pappamolle -> recensione positiva",
+      reviews.all_reviews()[0]["stars"] >= 4
+      and reviews.all_reviews()[0]["text"] in reviews.REC_POSITIVE)
+
+# misterioso: una notte in meno, prezzo pieno
+rid_my = reservations.create_reservation(
+    first_name="Mis", last_name="Tero", room_number=104, checkin=today,
+    checkout=d(3), adults=1, children=0, price_per_night=90, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.shorten_stay(rid_my)
+res_my = reservations.get(rid_my)
+check("bonus ???: una notte in meno",
+      res_my["checkout_date"] == d(2).isoformat())
+check("bonus ???: totale invariato (prezzo/notte ricalibrato)",
+      res_my["price_per_night"] == 135.0)
+
+# calmo: nessuna arrabbiatura durante il suo turno
+rec6 = staff.hire_receptionist("Cal", "Mo", "calmo", "full")
+staff.set_shift(rec6, days[0], "15-23")
+t_calm = datetime.combine(day0, time(17, 0))
+rid_cal = reservations.create_reservation(
+    first_name="Pa", last_name="Ziente", room_number=105, checkin=day0,
+    checkout=day0 + timedelta(days=2), adults=1, children=0,
+    price_per_night=50, board="RO", discount=None, phone="", email="",
+    color="", comments="")
+reception._spawn_checkin(reservations.get(rid_cal),
+                         datetime.combine(day0, time(15, 0)))
+check("bonus calmo: nessuno si arrabbia nel suo turno",
+      reception.handle_anger(t_calm) == 0)
+staff.set_shift(rec6, days[0], None)
+check("bonus calmo: senza di lui la rabbia torna",
+      reception.handle_anger(t_calm) == 1)
+
+# brutto muso: gli overstayer pagano
+rec7 = staff.hire_receptionist("Brut", "To", "brutto_muso", "full")
+staff.set_shift(rec7, days[0], "7-15")
+rid_ov2 = reservations.create_reservation(
+    first_name="Fuggi", last_name="Tivo", room_number=106,
+    checkin=day0 - timedelta(days=2), checkout=day0, adults=1, children=0,
+    price_per_night=80, board="RO", discount=None, phone="", email="",
+    color="", comments="")
+reservations.checkin_guest(rid_ov2, {"first_name": "Fuggi",
+                                     "last_name": "Tivo"})
+reservations.auto_checkout_overstayers(datetime.combine(day0, time(14, 45)))
+check("bonus brutto muso: l'overstayer paga il conto",
+      _last_stay_income() > 0)
+
+# barista: consumazioni al bar nel suo turno
+rec8 = staff.hire_receptionist("Ba", "Rista", "barista", "full")
+staff.set_shift(rec8, days[1], "7-15")
+rid_bar = reservations.create_reservation(
+    first_name="Beo", last_name="Ne", room_number=107, checkin=d(-1),
+    checkout=d(30), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_bar, {"first_name": "Beo", "last_name": "Ne"})
+gbar = guests.for_reservation(rid_bar)[0]["id"]
+t_bar = None
+for k in range(60):     # cerca un giorno del turno con la voglia di bar
+    day_b = day1 + timedelta(days=7 * k)
+    r = random.Random(f"bar:{gbar}:{day_b.isoformat()}")
+    wants = r.random() < 0.4
+    hour = r.randint(8, 22)
+    when = datetime.combine(day_b, time(hour, 30))
+    if wants and 7 <= hour < 15 and not guest_state._is_asleep(gbar, when):
+        t_bar = when
+        break
+check("bonus barista: trovata una consumazione", t_bar is not None)
+earned = reception.bar_tick(t_bar)
+check("bonus barista: incasso 5-10", 5 <= earned <= 10)
+check("bonus barista: una sola volta al giorno",
+      reception.bar_tick(t_bar) == 0.0)
+
+# contabile: bollette -20%
+rec9 = staff.hire_receptionist("Con", "Tabile", "contabile", "part")
+database.kv_set("last_utilities", "2026-11")
+exp_util = round((estate.UTILITY_BASE
+                  + estate.UTILITY_PER_ROOM * len(rooms.all_rooms())) * 0.8, 2)
+check("bonus contabile: bollette scontate del 20%",
+      estate.run_utilities(date(2026, 12, 1)) == exp_util)
+
+# --- banca: prestiti con interessi -------------------------------------------------
+database.kv_set("loans", [])
+bal_bank = budget.totals()["balance"]
+check("banca: importo sconosciuto rifiutato",
+      _raises(lambda: bank.take_loan(7777)))
+bank.take_loan(5000)
+check("banca: capitale accreditato subito",
+      budget.totals()["balance"] == round(bal_bank + 5000, 2))
+check("banca: debito = capitale + interessi (5% TAN)",
+      bank.total_debt() == 5250.0)
+check("banca: rata mensile = totale / 12",
+      bank.monthly_due() == round(5250 / 12, 2))
+bank.take_loan(15000)
+bank.take_loan(40000)
+check("banca: massimo 3 prestiti aperti",
+      _raises(lambda: bank.take_loan(5000)))
+debt_before = bank.total_debt()
+paid_rate = bank.pay_due(today)
+check("banca: la rata riduce il debito",
+      paid_rate == round(5250 / 12 + 16200 / 12 + 44800 / 12, 2)
+      and bank.total_debt() == round(debt_before - paid_rate, 2))
+
+# --- tasse di fine mese: IVA accantonata + rate ------------------------------------
+database.kv_set("loans", [])
+bank.take_loan(5000)
+database.kv_set("vat_due", 100.0)
+database.kv_set("last_taxes", None)
+check("tasse: il mese di avvio registra e basta",
+      taxes.settle(date(2026, 9, 10)) == 0.0)
+check("tasse: stesso mese niente addebiti",
+      taxes.settle(date(2026, 9, 25)) == 0.0)
+tot_tax = taxes.settle(date(2026, 10, 1))
+check("tasse: al cambio mese IVA + rata prestito",
+      tot_tax == round(100.0 + 5250 / 12, 2))
+check("tasse: IVA azzerata dopo il versamento", taxes.vat_due() == 0.0)
+check("tasse: una sola volta al mese",
+      taxes.settle(date(2026, 10, 20)) == 0.0)
+database.kv_set("loans", [])
+
+# --- capitale iniziale e prezzo di mercato -----------------------------------------
+database.kv_set("capital_granted", None)
+bal_cap = budget.totals()["balance"]
+estate.grant_starting_capital()
+check("capitale: 10000 al primo avvio",
+      budget.totals()["balance"] == round(bal_cap + 10000, 2))
+estate.grant_starting_capital()
+check("capitale: una tantum, non si ripete",
+      budget.totals()["balance"] == round(bal_cap + 10000, 2))
+
+database.kv_set("room_level", 0)
+check("prezzo di mercato: listino base", reservations.price_for("BB") == 85.0)
+database.kv_set("room_level", 2)
+check("prezzo di mercato: segue gli upgrade (x2.5)",
+      reservations.price_for("BB") == 212.5)
+database.kv_set("room_level", 0)
+
+# --- problemi: To Do, racconti in reception, emozioni --------------------------
+debug_seed.clear_all()
+database.get_conn().execute("DELETE FROM employees WHERE role = 'reception'")
+database.get_conn().commit()
+database.kv_set("rec_schedule", {})
+database.kv_set("amenities", [])
+database.kv_set("tuttofare_done", None)
+
+check("problemi: catalogo ricco (>= 13 voci)", len(problems.PROBLEMS) >= 13)
+elig = problems._eligible_keys()
+check("problemi: senza piscina niente guai in piscina",
+      "cacca_piscina" not in elig and "lampadina" in elig)
+database.kv_set("amenities", ["pool"])
+check("problemi: con la piscina i guai arrivano",
+      "cacca_piscina" in problems._eligible_keys())
+database.kv_set("amenities", [])
+
+rid_pb = reservations.create_reservation(
+    first_name="Guaio", last_name="Fortuna", room_number=101, checkin=d(-1),
+    checkout=d(3), adults=1, children=0, price_per_night=80, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_pb, {"first_name": "Guaio",
+                                    "last_name": "Fortuna"})
+pid = problems.spawn("lampadina", clock.now(), room_number=101)
+check("problemi: aperto nel To Do",
+      any(p["id"] == pid and p["resolved_at"] is None
+          for p in problems.todo_list()))
+prow = [e for e in reception.pending() if e["kind"] == "problem"][0]
+check("problemi: l'ospite scende a raccontarlo", "Lampadina" in prow["note"])
+grow_pb = guests.for_reservation(rid_pb)[0]
+check("problemi: mentre racconta e Assente/Reception",
+      guest_state.describe(grow_pb, clock.now())["locazione"] == "Reception")
+reception.remove(prow["id"])          # "scusati": la riga sparisce
+check("problemi: dopo le scuse resta aperto",
+      problems.get(pid)["resolved_at"] is None)
+check("problemi: emozione assegnata agli ospiti della camera",
+      problems.emotion_for_room(101) == "Ansia"
+      and guest_state.describe(grow_pb, clock.now())["emozione"] == "Ansia")
+
+budget.record(budget.INCOME, "TestProblemi", 1000)
+bal_pb = budget.totals()["balance"]
+problems.resolve(pid)
+check("problemi: riparazione pagata (20)",
+      budget.totals()["balance"] == round(bal_pb - 20, 2))
+check("problemi: risolto e barrato",
+      problems.get(pid)["resolved_at"] is not None)
+check("problemi: doppia risoluzione rifiutata",
+      _raises(lambda: problems.resolve(pid)))
+check("problemi: emozione svanita col problema",
+      problems.emotion_for_room(101) is None)
+
+pid2 = problems.spawn("scarafaggio", clock.now(), room_number=101)
+cln_pb = [e for e in staff.all_employees()
+          if e["role"] == staff.ROLE_CLEANING][0]["id"]
+h_pb = staff.month_hours(cln_pb, today)
+problems.resolve(pid2, operator_id=cln_pb)
+check("problemi: la pulizia va sul foglio ore (+0.5h)",
+      staff.month_hours(cln_pb, today) == h_pb + 0.5)
+pid3 = problems.spawn("puzza", clock.now(), room_number=101)
+check("problemi: pulizia senza operatore rifiutata",
+      _raises(lambda: problems.resolve(pid3)))
+problems.resolve(pid3, operator_id=cln_pb)
+
+# i risolti barrati spariscono dopo 7 giorni di gioco
+database.get_conn().execute(
+    "UPDATE problems SET resolved_at = ? WHERE id = ?",
+    ((clock.now() - timedelta(days=8)).isoformat(), pid))
+database.get_conn().commit()
+problems.purge(clock.now())
+ids_now = {p["id"] for p in problems.todo_list()}
+check("problemi: i barrati spariscono dopo 7 giorni",
+      pid not in ids_now and pid2 in ids_now)
+
+# spawn orario: una sola possibilita per ora di gioco
+database.kv_set("problems_hour", None)
+problems.rng.seed(1)
+_old_prob = problems.PROB_PER_HOUR
+problems.PROB_PER_HOUR = 1.0
+t_sp = datetime(2026, 7, 20, 10, 0)
+check("problemi: nascita oraria", problems.maybe_spawn(t_sp) is True)
+check("problemi: una sola chance per ora",
+      problems.maybe_spawn(t_sp) is False)
+problems.PROB_PER_HOUR = _old_prob
+database.get_conn().execute("DELETE FROM problems")
+database.get_conn().commit()
+
+# recensione dell'emozione al check-out (dado deterministico)
+problems.spawn("lampadina", clock.now(), room_number=101)
+emo_exp = random.Random(f"co:{rid_pb}").random() < problems.EMOTION_REVIEW_PROB
+reservations.do_checkout(rid_pb)
+target = reviews.EMOTION_NEG.format(emo="ansia")
+found = any(r["text"] == target for r in reviews.all_reviews(20))
+check("problemi: recensione dell'emozione secondo il dado", found == emo_exp)
+
+# --- nuovi bonus receptionist -------------------------------------------------------
+check("rec: i 5 nuovi bonus esistono",
+      all(b in staff.BONUSES for b in
+          ("autonomo", "cucciolo", "cashback", "stagista", "tuttofare")))
+
+sid = staff.hire_receptionist("Sta", "Gista", "stagista", "full")
+e_st = staff.get(sid)
+check("stagista: part-time forzato e paga zero",
+      e_st["contract"] == "part" and e_st["hourly"] == 0.0)
+check("stagista: contratto di un solo mese",
+      e_st["contract_until"] == (today + timedelta(days=30)).isoformat())
+database.get_conn().execute(
+    "UPDATE employees SET contract_until = ? WHERE id = ?",
+    (d(-1).isoformat(), sid))
+database.get_conn().commit()
+staff.contracts_tick(today)
+check("stagista: a fine stage va sempre via", staff.get(sid) is None)
+
+aid = staff.hire_receptionist("Auto", "Nomo", "autonomo", "full")
+staff.set_shift(aid, days[0], "7-15")
+t_auto = datetime.combine(day0, time(8, 0))
+rid_ci2 = reservations.create_reservation(
+    first_name="Arri", last_name="Vante", room_number=102, checkin=day0,
+    checkout=day0 + timedelta(days=2), adults=1, children=0,
+    price_per_night=50, board="RO", discount=None, phone="", email="",
+    color="", comments="")
+reception._spawn_checkin(reservations.get(rid_ci2), t_auto)
+rid_co3 = reservations.create_reservation(
+    first_name="Par", last_name="Tente", room_number=103,
+    checkin=day0 - timedelta(days=2), checkout=day0, adults=1, children=0,
+    price_per_night=50, board="RO", discount=None, phone="", email="",
+    color="", comments="")
+reservations.checkin_guest(rid_co3, {"first_name": "Par",
+                                     "last_name": "Tente"})
+reception._spawn_checkout(reservations.get(rid_co3), t_auto)
+n_auto = reception.auto_desk(t_auto)
+check("autonomo: sportello svuotato da solo",
+      n_auto >= 2 and all(e["kind"] not in ("checkin", "checkout")
+                          for e in reception.pending()))
+check("autonomo: check-in registrato",
+      reservations.get(rid_ci2)["status"] == "checked_in")
+check("autonomo: check-out incassato",
+      reservations.get(rid_co3)["status"] == "checked_out")
+check("autonomo: fuori turno non tocca nulla",
+      reception.auto_desk(datetime.combine(day0, time(20, 0))) == 0)
+
+# cucciolo: la recensione negativa sparisce (e a volte si ribalta)
+rid_cu = reservations.create_reservation(
+    first_name="Morbi", last_name="Doso", room_number=104, checkin=d(-2),
+    checkout=today, adults=1, children=0, price_per_night=100, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_cu, {"first_name": "Morbi",
+                                    "last_name": "Doso"})
+reception._bump_complaints(rid_cu)      # 1 reclamo -> 3 stelle (negativa)
+rr = random.Random(f"co:{rid_cu}")
+a_cu, b_cu = rr.random(), rr.random()
+n_rev = len(reviews.all_reviews(200))
+reservations.do_checkout(rid_cu, receptionist={"bonus": "cucciolo"})
+after_cu = reviews.all_reviews(200)
+if a_cu < 0.5 and b_cu < 0.5:
+    ok_cu = (len(after_cu) == n_rev + 1 and after_cu[0]["stars"] >= 4
+             and after_cu[0]["text"] in reviews.REC_POSITIVE)
+elif a_cu < 0.5:
+    ok_cu = len(after_cu) == n_rev
+else:
+    ok_cu = len(after_cu) == n_rev + 1 and after_cu[0]["stars"] == 3
+check("cucciolo: negativa sparita o ribaltata (secondo il dado)", ok_cu)
+
+# cashback: 10% delle spese del turno a fine turno
+cbid = staff.hire_receptionist("Cash", "Back", "cashback", "full")
+staff.set_shift(cbid, days[1], "7-15")
+database.kv_set("cashback_snap", {})
+staff._cashback_tick(datetime.combine(day1, time(8, 0)))    # snapshot
+budget.record(budget.LOSS, "TestSpesa", 200)
+staff._cashback_tick(datetime.combine(day1, time(16, 0)))   # fine turno
+cb_rows = [e for e in budget.entries() if e["category"] == "Cashback"]
+check("cashback: rimborso del 10% a fine turno",
+      bool(cb_rows) and cb_rows[-1]["amount"] == 20.0)
+
+# tuttofare: una riparazione gratis al giorno nel suo turno
+tid = staff.hire_receptionist("Tutto", "Fare", "tuttofare", "full")
+staff.set_shift(tid, days[0], "7-15")
+rid_tf = reservations.create_reservation(
+    first_name="Ospi", last_name="Te", room_number=105, checkin=d(-1),
+    checkout=d(3), adults=1, children=0, price_per_night=50, board="RO",
+    discount=None, phone="", email="", color="", comments="")
+reservations.checkin_guest(rid_tf, {"first_name": "Ospi", "last_name": "Te"})
+problems.spawn("tv", clock.now(), room_number=105)
+database.kv_set("tuttofare_done", None)
+first_open = problems.open_problems()[0]["id"]
+bal_tf = budget.totals()["balance"]
+check("tuttofare: ripara gratis nel suo turno",
+      problems.autofix(datetime.combine(day0, time(9, 0))) is True
+      and problems.get(first_open)["resolved_at"] is not None
+      and budget.totals()["balance"] == bal_tf)
+problems.spawn("materasso", clock.now(), room_number=105)
+check("tuttofare: una sola riparazione al giorno",
+      problems.autofix(datetime.combine(day0, time(10, 0))) is False)
 
 print()
 if failures:

@@ -1,6 +1,7 @@
 """Prenotazioni: creazione, disponibilita, check-in e check-out."""
 
-from datetime import date
+import random
+from datetime import date, timedelta
 
 from . import billing, budget, clock, constants, guests, rooms
 from .database import get_conn
@@ -8,6 +9,14 @@ from .database import get_conn
 
 class ValidationError(Exception):
     """Errore bloccante nei dati di una prenotazione."""
+
+
+def price_for(board: str) -> float:
+    """Prezzo per notte di mercato: listino base x upgrade delle camere.
+    E lui a decidere il prezzo, non l'operatore al banco."""
+    from . import amenities            # import differiti: evitano i cicli
+    from .debug_seed import DEFAULT_BOARD_PRICES
+    return round(DEFAULT_BOARD_PRICES[board] * amenities.price_mult(), 2)
 
 
 def make_code(adults: int, children: int, booking_date: date, board: str) -> str:
@@ -232,46 +241,82 @@ def checkin_guest(res_id: int, guest: dict) -> None:
         rooms.set_dirty(res["room_number"], True)
 
 
-def do_checkout(res_id: int, *, paid: bool = True) -> None:
+def do_checkout(res_id: int, *, paid: bool = True, receptionist=None) -> None:
     """Conferma il check-out: la camera si libera ma resta sporca.
 
     Con paid=False (uscita d'ufficio) registra a bilancio importo 0.
+    `receptionist` e chi sta al banco: il suo bonus puo gonfiare/scontare il
+    conto, generare mance o recensioni dedicate.
     """
     res = get(res_id)
     if res is None or res["status"] != "checked_in":
         raise ValidationError("Prenotazione non valida per il check-out.")
     from . import reviews   # import differito: evita il ciclo
+    bonus = receptionist["bonus"] if receptionist is not None else None
     conn = get_conn()
     conn.execute("UPDATE reservations SET status = 'checked_out' WHERE id = ?",
                  (res_id,))
-    # usura: camera gia logora -> l'ospite se ne accorge (reclamo implicito)
+    # usura: camera gia logora -> l'ospite se ne accorge (reclamo implicito);
+    # col manutentore assunto l'usura cresce la meta
     room = rooms.get_room(res["room_number"])
     complaints = res["complaints"] + (1 if room["wear"] >= constants.WEAR_LIMIT
                                       else 0)
-    conn.execute("UPDATE rooms SET wear = wear + 1 WHERE number = ?",
-                 (res["room_number"],))
+    r = random.Random(f"co:{res_id}")
+    from . import staff   # import differito: staff importa reservations
+    if not (staff.employed_bonus("manutentore") and r.random() < 0.5):
+        conn.execute("UPDATE rooms SET wear = wear + 1 WHERE number = ?",
+                     (res["room_number"],))
     conn.commit()
     rooms.set_dirty(res["room_number"], True)
-    # recensione di fine soggiorno: 5 stelle, -2 a reclamo, -1 se non paga
-    reviews._add(f"{res['first_name']} {res['last_name']}".strip(),
-                 reviews.STARS_MAX - 2 * complaints - (0 if paid else 1))
+
+    # recensione: 5 stelle, -2 a reclamo, -1 se non paga; le positive escono
+    # solo grazie a servizi dell'hotel o al receptionist di turno
+    from . import problems   # import differito
+    guest_name = f"{res['first_name']} {res['last_name']}".strip()
+    stars = reviews.STARS_MAX - 2 * complaints - (0 if paid else 1)
+    force, skip_review = None, False
+    if bonus == "truffatore":
+        force = "negative"
+    elif bonus == "pappamolle" or (bonus == "memorabile"
+                                   and r.random() < 0.5):
+        force = "positive"
+    if bonus == "cucciolo" and force is None and stars <= 3:
+        # 50%: la recensione negativa sparisce; meta delle volte si ribalta
+        if r.random() < 0.5:
+            skip_review = True
+            if r.random() < 0.5:
+                force, skip_review = "positive", False
+    if not skip_review:
+        reviews.leave_checkout(guest_name, stars, force)
+    # un problema aperto in camera puo finire in recensione (l'emozione)
+    emotion = problems.emotion_for_room(res["room_number"])
+    if emotion and r.random() < problems.EMOTION_REVIEW_PROB:
+        reviews.leave_emotion(guest_name, emotion,
+                              emotion in problems.POSITIVE_EMOTIONS)
 
     if not paid:
         budget.record(budget.INCOME, "Soggiorno", 0, "L'ospite non ha pagato.")
         return
 
-    # il conto alimenta il bilancio: netto come introito, IVA come perdita
+    # si incassa il 100% del ricavato; l'IVA si accantona e si versa a fine
+    # mese con le tasse. Persuasore/truffatore/pappamolle ritoccano il totale.
+    from . import taxes   # import differito
+    mult = {"persuasore": 1.25, "truffatore": 1.5,
+            "pappamolle": 0.75}.get(bonus, 1.0)
     t = billing.bill_totals(res)
     note = f"Camera {res['room_number']} - {guest_display_name(res)}"
-    budget.record(budget.INCOME, "Soggiorno", t["net"], note)
-    if t["vat"]:
-        budget.record(budget.LOSS, "IVA", t["vat"], note)
+    budget.record(budget.INCOME, "Soggiorno", round(t["total"] * mult, 2), note)
+    taxes.accrue_vat(round(t["vat"] * mult, 2))
+    if bonus == "bell_aspetto" and r.random() < 0.4:
+        budget.record(budget.INCOME, "Mance", round(r.uniform(5, 20), 2), note)
 
 
 def auto_checkout_overstayers(now) -> int:
     """Sicurezza: chi e ancora in camera il giorno di check-out dopo le 14:30
-    (o gia oltre) viene fatto uscire d'ufficio, senza addebito. Ritorna quanti."""
-    from . import reception   # import differito: evita il ciclo
+    (o gia oltre) viene fatto uscire d'ufficio, senza addebito. Col 'brutto
+    muso' di turno, pero, nessuno scappa senza pagare. Ritorna quanti."""
+    from . import reception, staff   # import differiti: evitano il ciclo
+    forced_pay = staff.on_duty_bonus("brutto_muso", now)
     today = now.date().isoformat()
     deadline = now.replace(hour=14, minute=30, second=0, microsecond=0)
     rows = get_conn().execute(
@@ -282,9 +327,27 @@ def auto_checkout_overstayers(now) -> int:
         if r["checkout_date"] < today or now >= deadline:
             get_conn().execute(
                 "DELETE FROM reception WHERE reservation_id = ?", (r["id"],))
-            do_checkout(r["id"], paid=False)
+            do_checkout(r["id"], paid=forced_pay)
             done += 1
     return done
+
+
+def shorten_stay(res_id: int) -> None:
+    """Bonus '???': l'ospite resta una notte in meno (minimo 1) ma il totale
+    del conto non cambia (prezzo per notte ricalibrato)."""
+    res = get(res_id)
+    checkin = date.fromisoformat(res["checkin_date"])
+    checkout = date.fromisoformat(res["checkout_date"])
+    nights = (checkout - checkin).days
+    if nights <= 1:
+        return
+    conn = get_conn()
+    conn.execute(
+        "UPDATE reservations SET checkout_date = ?, price_per_night = ?"
+        " WHERE id = ?",
+        ((checkout - timedelta(days=1)).isoformat(),
+         round(res["price_per_night"] * nights / (nights - 1), 2), res_id))
+    conn.commit()
 
 
 def guest_display_name(res) -> str:

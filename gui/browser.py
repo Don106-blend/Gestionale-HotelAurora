@@ -6,7 +6,9 @@ from tkinter import ttk
 from hotel import mail
 
 from .allfoods import AllFoodsWindow
+from .bank_view import BankWindow
 from .mail_view import MailInbox
+from .reception_staff import CandidatesWindow
 from .renovation import RenovationWindow
 from .reviews_view import ReviewsWindow
 
@@ -28,6 +30,10 @@ class BrowserPage(ttk.Frame):
             ("AllFoods!",
              lambda: AllFoodsWindow(self.app, on_change=self.app.refresh)),
             ("TrustHotel", lambda: ReviewsWindow(self.app)),
+            ("JobHotel",
+             lambda: CandidatesWindow(self.app, on_change=self.app.refresh)),
+            ("Banca di Aurora",
+             lambda: BankWindow(self.app, on_change=self.app.refresh)),
         )
         for i, (label, cmd) in enumerate(apps):
             ttk.Button(grid, text=label, width=22, command=cmd).grid(

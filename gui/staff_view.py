@@ -43,6 +43,8 @@ class StaffWindow(tk.Toplevel):
                    command=self._fire).pack(side="left", padx=4)
         ttk.Button(btns, text="Foglio ore",
                    command=self._sheet).pack(side="right")
+        ttk.Button(btns, text="Turni receptionist",
+                   command=self._rec_schedule).pack(side="right", padx=4)
 
         plan = ttk.LabelFrame(f, text="Turni di domani (in servizio)",
                               padding=8)
@@ -71,11 +73,18 @@ class StaffWindow(tk.Toplevel):
             name = f"{e['first_name']} {e['last_name']}"
             if staff.is_sick(e["id"], today):
                 name += "  (malato oggi)"
-            stat = (f"{e['served']} serviti"
-                    if e["role"] == staff.ROLE_DINING
-                    else f"x{staff.speed_factor(e['id']):.2f} velocita")
+            role = staff.ROLE_LABELS[e["role"]]
+            if e["role"] == staff.ROLE_RECEPTION:
+                role += f" ({staff.CONTRACTS[e['contract']]['label']})"
+                stat = staff.BONUSES[e["bonus"]][0]
+                if not e["permanent"]:
+                    stat += f" — prova fino al {e['contract_until']}"
+            elif e["role"] == staff.ROLE_DINING:
+                stat = f"{e['served']} serviti"
+            else:
+                stat = f"x{staff.speed_factor(e['id']):.2f} velocita"
             self.tree.insert("", "end", iid=str(e["id"]), values=(
-                name, staff.ROLE_LABELS[e["role"]], f"{e['hourly']:g}",
+                name, role, f"{e['hourly']:g}",
                 e["hired_on"], f"{staff.month_hours(e['id'], today):g}",
                 f"{staff.unpaid_hours(e['id']):g}", stat))
         current = staff.roster()
@@ -123,6 +132,10 @@ class StaffWindow(tk.Toplevel):
                                      parent=self)
                 return
         self._reload()
+
+    def _rec_schedule(self):
+        from .reception_staff import ScheduleWindow
+        ScheduleWindow(self, on_change=self._reload)
 
     def _sheet(self):
         win = tk.Toplevel(self)

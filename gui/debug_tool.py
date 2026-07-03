@@ -41,7 +41,7 @@ class DebugToolWindow(tk.Toplevel):
     def __init__(self, master, on_done):
         super().__init__(master)
         self.on_done = on_done
-        self.title("Strumento di debug")
+        self.title("Impostazioni")
         self.resizable(False, False)
         self.transient(master)
         self._build()

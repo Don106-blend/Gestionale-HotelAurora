@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import estate, mail, reviews
+from hotel import amenities, estate, mail, reviews
 
 
 class ReviewsWindow(tk.Toplevel):
@@ -17,13 +17,15 @@ class ReviewsWindow(tk.Toplevel):
         f = ttk.Frame(self, padding=12)
         f.pack(fill="both", expand=True)
         rep = reviews.reputation()
-        ttk.Label(f, text=f"TrustHotel — {estate.hotel_name()}",
+        t = amenities.tier()
+        ttk.Label(f, text=f"TrustHotel — {estate.hotel_name()}"
+                          f"  {'★' * t} ({t} stelle)",
                   font=("TkDefaultFont", 14, "bold")).pack(anchor="w")
-        ttk.Label(f, text=f"Reputazione: {'★' * round(rep)}{'☆' * (5 - round(rep))}"
-                          f"  {rep}/5   |   Domanda attuale:"
-                          f" x{mail.demand_factor():.2f}"
-                          " (stagione x reputazione)").pack(anchor="w",
-                                                            pady=(2, 8))
+        ttk.Label(f, text=f"Rating ospiti: {'★' * round(rep)}"
+                          f"{'☆' * (5 - round(rep))}  {rep}/5   |"
+                          f"   Domanda attuale: x{mail.demand_factor():.2f}"
+                          " (stagione x rating x categoria)").pack(
+            anchor="w", pady=(2, 8))
         tree = ttk.Treeview(f, show="headings",
                             columns=[c[0] for c in self.COLUMNS])
         for key, heading, width in self.COLUMNS:

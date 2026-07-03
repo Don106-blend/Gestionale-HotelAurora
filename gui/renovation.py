@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import ttk
 
-from hotel import budget, dining, estate
+from hotel import amenities, budget, dining, estate
 
 
 class RenovationWindow(tk.Toplevel):
@@ -11,18 +11,23 @@ class RenovationWindow(tk.Toplevel):
         super().__init__(master)
         self.on_change = on_change or (lambda: None)
         self.title("Ristrutturazioni")
-        self.geometry("440x440")
+        self.geometry("880x560")
         self.floor_var = tk.StringVar()
         self.suite_var = tk.BooleanVar(value=False)
         self._build()
         self._reload()
 
     def _build(self):
-        f = ttk.Frame(self, padding=12)
-        f.pack(fill="both", expand=True)
+        outer = ttk.Frame(self, padding=12)
+        outer.pack(fill="both", expand=True)
+        f = ttk.Frame(outer)
+        f.pack(side="left", fill="both", expand=True)
+        self.right = ttk.Frame(outer)
+        self.right.pack(side="left", fill="both", expand=True, padx=(20, 0))
         self.balance_lbl = ttk.Label(f, font=("TkDefaultFont", 11, "bold"))
         self.balance_lbl.pack(anchor="w")
         ttk.Separator(f).pack(fill="x", pady=8)
+        self._build_amenities(self.right)
 
         ttk.Label(f, text="Piani", font=("TkDefaultFont", 10, "bold")).pack(
             anchor="w")
@@ -91,6 +96,32 @@ class RenovationWindow(tk.Toplevel):
         self.msg = ttk.Label(f, foreground="red")
         self.msg.pack(anchor="w", pady=(6, 0))
 
+    def _build_amenities(self, r):
+        ttk.Label(r, text="Categoria e servizi",
+                  font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        self.tier_lbl = ttk.Label(r, font=("TkDefaultFont", 10, "bold"))
+        self.tier_lbl.pack(anchor="w", pady=(4, 0))
+        self.tier_next_lbl = ttk.Label(r, justify="left", wraplength=340)
+        self.tier_next_lbl.pack(anchor="w", pady=(0, 6))
+        ttk.Separator(r).pack(fill="x", pady=4)
+
+        self.amenity_btns = {}
+        for key in amenities.AMENITIES:
+            btn = ttk.Button(r, command=lambda k=key: self._do(
+                lambda: amenities.buy(k)))
+            btn.pack(anchor="w", pady=2, fill="x")
+            self.amenity_btns[key] = btn
+
+        ttk.Separator(r).pack(fill="x", pady=4)
+        ttk.Label(r, text="Upgrade camere (prezzi e costi di tutto l'hotel)",
+                  font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
+        self.level_btns = {}
+        for level in amenities.ROOM_LEVELS:
+            btn = ttk.Button(r, command=lambda lv=level: self._do(
+                lambda: amenities.buy_room_upgrade(lv)))
+            btn.pack(anchor="w", pady=2, fill="x")
+            self.level_btns[level] = btn
+
     def _reload(self):
         bal = budget.totals()["balance"]
         self.balance_lbl.config(text=f"Saldo: € {bal:,.2f}")
@@ -141,6 +172,34 @@ class RenovationWindow(tk.Toplevel):
             text=f"Rinnova — € {estate.RENOVATE_COST:,.0f}",
             state="normal" if (worn and bal >= estate.RENOVATE_COST)
             else "disabled")
+
+        t = amenities.tier()
+        self.tier_lbl.config(text=f"Categoria: {'★' * t}{'☆' * (5 - t)}"
+                                  f"  ({t} stelle)")
+        missing = amenities.missing_for_next()
+        self.tier_next_lbl.config(
+            text=("Categoria massima raggiunta." if not missing
+                  else "Per la prossima stella: " + ", ".join(missing)))
+        own = amenities.owned()
+        for key, btn in self.amenity_btns.items():
+            a = amenities.AMENITIES[key]
+            if key in own:
+                btn.config(text=f"✓ {a['label']}", state="disabled")
+            else:
+                btn.config(text=f"{a['label']} — € {a['cost']:,.0f}",
+                           state="normal" if bal >= a["cost"] else "disabled")
+        lvl = amenities.room_level()
+        for level, btn in self.level_btns.items():
+            info = amenities.ROOM_LEVELS[level]
+            if lvl >= level:
+                btn.config(text=f"✓ {info['label']} (x{info['mult']:g})",
+                           state="disabled")
+            else:
+                cost = amenities.room_upgrade_cost(level)
+                btn.config(
+                    text=f"{info['label']} (x{info['mult']:g}) — € {cost:,.0f}",
+                    state="normal" if (bal >= cost and lvl == level - 1)
+                    else "disabled")
 
     def _buy_floor(self):
         self._do(estate.buy_floor)

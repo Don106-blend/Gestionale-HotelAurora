@@ -10,7 +10,7 @@ from datetime import date, datetime, timedelta
 
 _sim: datetime | None = None
 _last_mono: float | None = None
-scale: float = 24.0      # ore di gioco per 1 ora reale (base, dal debug)
+scale: float = 48.0      # ore di gioco per 1 ora reale (base, dal debug)
 running: bool = False
 
 # Controllo velocita "al volo": moltiplicatore SOPRA le basi del debug, non le

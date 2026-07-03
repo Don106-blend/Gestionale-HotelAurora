@@ -3,7 +3,7 @@
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from hotel import billing, reservations
+from hotel import billing, clock, reservations, staff
 
 
 class CheckoutView(tk.Toplevel):
@@ -40,7 +40,9 @@ class CheckoutView(tk.Toplevel):
                 f" {self.res['room_number']}?", parent=self):
             return
         try:
-            reservations.do_checkout(self.res["id"])
+            reservations.do_checkout(
+                self.res["id"],
+                receptionist=staff.receptionist_on_duty(clock.now()))
         except reservations.ValidationError as exc:
             messagebox.showerror("Errore", str(exc), parent=self)
             return
