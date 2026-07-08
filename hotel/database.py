@@ -139,7 +139,9 @@ CREATE TABLE IF NOT EXISTS problems (
     key         TEXT NOT NULL,          -- voce del catalogo problemi
     room_number INTEGER,                -- NULL = problema di un servizio/zona
     created_at  TEXT NOT NULL,
-    resolved_at TEXT                    -- NULL = aperto; barrato se valorizzato
+    due_at      TEXT,                   -- riparazione avviata: completa a quest'ora
+    resolved_at TEXT,                   -- NULL = aperto; barrato se valorizzato
+    room_blocked INTEGER NOT NULL DEFAULT 0  -- camera bloccata per questo problema
 );
 
 CREATE TABLE IF NOT EXISTS settings (
@@ -232,6 +234,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "note" not in rc_cols:       # testo del problema raccontato al banco
         conn.execute("ALTER TABLE reception ADD COLUMN note TEXT"
                      " NOT NULL DEFAULT ''")
+    prob_cols = [r[1] for r in conn.execute("PRAGMA table_info(problems)")]
+    if "due_at" not in prob_cols:   # riparazione avviata: completa a quest'ora
+        conn.execute("ALTER TABLE problems ADD COLUMN due_at TEXT")
+    if "room_blocked" not in prob_cols:
+        conn.execute("ALTER TABLE problems ADD COLUMN room_blocked INTEGER"
+                     " NOT NULL DEFAULT 0")
 
 
 def _seed_rooms(conn: sqlite3.Connection) -> None:

@@ -24,7 +24,7 @@ class MailConfig:
     probability: float = 0.5
     auto_insert: bool = False
     returning_probability: float = 0.5   # quota di mail da ospiti abituali
-    window_days: int = 5                 # check-in entro N giorni dal tempo simulato
+    window_days: int = 14                # check-in entro N giorni dal tempo simulato
     # probabilita per turno; i turni non elencati usano `probability` (standard)
     shift_probability: dict = field(default_factory=lambda: {
         "Pranzo": 0.2, "Sera": 0.2, "Notte": 0.05})

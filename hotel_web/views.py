@@ -3,6 +3,7 @@ qui (HTML minimale via templates.page). Nessuna logica di gioco vive nelle
 view: quella gira nel game loop di session_state, questa e solo lettura +
 azioni dirette dell'utente (check-in, prenota, sposta, risolvi, ...)."""
 
+import json
 import uuid
 from datetime import date, datetime, timedelta
 
@@ -20,7 +21,6 @@ from . import session_state, templates
 bp = Blueprint("web", __name__)
 
 WEEKDAYS = ("Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom")
-BOARD_CHOICES = [(b.code, f"{b.code} - {b.label}") for b in constants.BOARDS.values()]
 _SETUP_ENDPOINTS = {"web.setup", "web.setup_receptionist"}
 
 
@@ -158,12 +158,12 @@ def speed():
 # --- dashboard: griglia camere -------------------------------------------------
 
 DASHBOARD_TPL = """
-<div class="card" style="display:flex;justify-content:space-between;align-items:center">
-  <a class="btn" href="{{ url_for('web.booking_page') }}">{{ icon('plus', 14) }} Nuova prenotazione</a>
+<div class="card">
   <span style="font-size:12px;color:#555">Clicca una camera per la scheda.
     Striscia gialla = check-out oggi | quadrato fucsia = arrivo oggi |
     quadrato blu = arrivo domani | linea grigia = sporca | rossa = bloccata |
-    arancione = logora</span>
+    arancione = logora. Le prenotazioni arrivano da sole via Mail; le pulizie
+    partono da sole col personale a turno.</span>
 </div>
 {% for floor, floor_rooms in floors %}
 <h3>Piano {{ floor }}</h3>
@@ -220,11 +220,15 @@ ROOM_TPL = """
    {{ 'Sporca' if room.dirty else 'Pulita' }} |
    {{ 'Bloccata' if room.blocked else 'Sbloccata' }} |
    Usura: {{ room.wear }}{{ ' (logora)' if worn else '' }}</p>
-<form method="post" action="{{ url_for('web.room_toggle', number=number, what='clean') }}" style="display:inline">
-  <button>{{ 'Segna pulita' if room.dirty else 'Segna sporca' }}</button></form>
+{% if not room.dirty %}
+<form method="post" action="{{ url_for('web.room_toggle', number=number, what='dirty') }}" style="display:inline">
+  <button>Segna sporca</button></form>
+{% else %}
+<span style="font-size:12px;color:#555">In attesa delle pulizie (le pulizie
+  partono da sole col personale a turno).</span>
+{% endif %}
 <form method="post" action="{{ url_for('web.room_toggle', number=number, what='block') }}" style="display:inline">
   <button>{{ 'Sblocca' if room.blocked else 'Blocca' }}</button></form>
-<a class="btn" href="{{ url_for('web.booking_page', room=number) }}">Nuova prenotazione</a>
 {% if current %}<a class="btn" href="{{ url_for('web.room_guests', number=number) }}">Ospiti in camera</a>{% endif %}
 {% if room_msg %}<p class="msg">{{ room_msg }}</p>{% endif %}
 </div>
@@ -271,8 +275,9 @@ def room_toggle(number, what):
     room = rooms.get_room(number)
     if room is None:
         return redirect(url_for("web.dashboard"))
-    if what == "clean":
-        rooms.set_dirty(number, not room["dirty"])
+    if what == "dirty":
+        # solo sporcare a mano: pulire e automatizzato dal gameplay (staff.tick)
+        rooms.set_dirty(number, True)
     elif what == "block":
         if not room["blocked"] and reservations.current_for_room(number):
             return _room_page(number, msg="Non si puo bloccare una camera occupata.")
@@ -357,20 +362,18 @@ def occupancy():
 
 
 # --- timeline: barre prenotazioni + spostamento camera -------------------------
+# Frammento di tabella condiviso: usato dalla pagina Timeline intera e (con
+# evidenziazione) incorporato sotto una mail di richiesta prenotazione, per
+# poter fare spazio spostando le prenotazioni senza cambiare pagina.
 
-TIMELINE_TPL = """
-<div class="card">
-<h2>Timeline</h2>
-<p style="font-size:12px;color:#555">Trascina una prenotazione non ancora arrivata
-  su un'altra riga-camera per spostarla (stesse date). Le prenotazioni gia in
-  check-in non si trascinano.</p>
+TIMELINE_TABLE_TPL = """
 <div class="tl">
 <table>
 <colgroup>
-  <col style="width:52px">
-  {% for d in days %}<col style="width:34px">{% endfor %}
+  <col style="width:60px">
+  {% for d in days %}<col style="width:42px">{% endfor %}
 </colgroup>
-<tr><th class="room">Cam.</th>{% for d in days %}<th class="{{ 'today' if d.today }}">{{ d.label }}</th>{% endfor %}</tr>
+<tr><th class="room">Cam.</th>{% for d in days %}<th class="{{ 'today' if d.today }} {{ 'hl' if d.hl }} {{ 'full' if d.full }}">{{ d.label }}</th>{% endfor %}</tr>
 {% for row in grid %}
 <tr data-room="{{ row.number }}">
   <td class="room">{{ row.number }}</td>
@@ -378,17 +381,16 @@ TIMELINE_TPL = """
   {% if c.span %}
   <td colspan="{{ c.span }}">
     <div class="bar{{ ' movable' if c.movable }}" style="background-color:{{ c.color }}"
-      title="{{ c.name }} ({{ c.ci }} → {{ c.co }})"
-      {% if c.movable %} draggable="true" data-res="{{ c.res_id }}"{% endif %}>{{ c.name }}</div>
+      title="{{ c.name }} ({{ c.ci }} → {{ c.co }})" data-res="{{ c.res_id }}"
+      {% if c.movable %} draggable="true"{% endif %}>{{ c.name }}</div>
   </td>
   {% else %}
-  <td class="{{ 'today' if c.today }}"></td>
+  <td class="{{ 'today' if c.today }} {{ 'hl' if c.hl }} {{ 'full' if c.full }}"></td>
   {% endif %}
   {% endfor %}
 </tr>
 {% endfor %}
 </table>
-</div>
 </div>
 <script>
 (function(){
@@ -402,6 +404,11 @@ TIMELINE_TPL = """
   document.addEventListener("dragend", () => {
     dragged = null;
     document.querySelectorAll("tr.drop").forEach(t => t.classList.remove("drop"));
+  });
+  document.addEventListener("click", e => {
+    // click su una barra (senza che sia appena finito un trascinamento) -> dettaglio
+    const bar = e.target.closest(".bar");
+    if (bar && bar.dataset.res && !dragged) location.href = "/reservation/" + bar.dataset.res;
   });
   document.querySelectorAll("tr[data-room]").forEach(tr => {
     tr.addEventListener("dragover", e => { if (dragged) { e.preventDefault(); tr.classList.add("drop"); } });
@@ -424,18 +431,27 @@ TIMELINE_TPL = """
 </script>
 """
 
+TIMELINE_TPL = """
+<div class="card">
+<h2>Timeline</h2>
+<p style="font-size:12px;color:#555">Trascina una prenotazione non ancora arrivata
+  su un'altra riga-camera per spostarla (stesse date). Clicca una prenotazione
+  per aprirne i dettagli. Le prenotazioni gia in check-in non si trascinano.</p>
+""" + TIMELINE_TABLE_TPL + """
+</div>
+"""
+
 TL_STATUS_COLOR = {"booked": constants.COLOR_BOOKED_BAR,
                    "checked_in": constants.COLOR_OCCUPIED}
 
 
-def _timeline_page():
+def _timeline_grid(start, n_days, highlight_start=None, highlight_end=None):
+    """Griglia camere x giorni da `start` per `n_days`. Con highlight_*
+    marca il periodo (checkin<=d<checkout) e i giorni in cui l'hotel e
+    completo (nessuna camera libera) -- usato per la mini-timeline sotto
+    una mail di richiesta."""
     today = clock.today()
-    start = today - timedelta(days=3)
-    n_days = 31
-    days = [{"label": (start + timedelta(days=i)).strftime("%d/%m"),
-             "today": start + timedelta(days=i) == today} for i in range(n_days)]
     span = [start + timedelta(days=i) for i in range(n_days)]
-    # copertura per (camera, giorno): prenotazione attiva che copre quel giorno
     cover = {}
     for res in reservations.in_range(start, span[-1]):
         ci = date.fromisoformat(res["checkin_date"])
@@ -443,14 +459,26 @@ def _timeline_page():
         for d in span:
             if ci <= d < co:
                 cover[(res["room_number"], d)] = res
+    all_rooms = rooms.all_rooms()
+    total_rooms = len(all_rooms)
+    full_days = {d for d in span if sum(
+        1 for r in all_rooms if (r["number"], d) in cover) >= total_rooms}
+
+    def hl(d):
+        return bool(highlight_start and highlight_start <= d < highlight_end)
+
+    days = [{"label": d.strftime("%d/%m"), "today": d == today,
+             "hl": hl(d), "full": d in full_days} for d in span]
     grid = []
-    for r in rooms.all_rooms():
+    for r in all_rooms:
         cells = []
         i = 0
         while i < n_days:
-            res = cover.get((r["number"], span[i]))
+            d = span[i]
+            res = cover.get((r["number"], d))
             if res is None:
-                cells.append({"span": 0, "today": span[i] == today})
+                cells.append({"span": 0, "today": d == today, "hl": hl(d),
+                              "full": d in full_days})
                 i += 1
                 continue
             # barra continua: un solo td con colspan per tutta la permanenza
@@ -469,6 +497,11 @@ def _timeline_page():
                 "color": res["color"] or TL_STATUS_COLOR.get(res["status"], "#ccc")})
             i += length
         grid.append({"number": r["number"], "cells": cells})
+    return days, grid
+
+
+def _timeline_page():
+    days, grid = _timeline_grid(clock.today() - timedelta(days=3), 31)
     return render_page("Timeline", "web.timeline_page", TIMELINE_TPL,
                        live=False, days=days, grid=grid)
 
@@ -490,108 +523,36 @@ def timeline_move():
     return {"ok": True}
 
 
-# --- nuova prenotazione (BookingForm) ------------------------------------------
+# --- dettaglio prenotazione (dal click sulla timeline) --------------------------
 
-BOOKING_TPL = """
+RESERVATION_TPL = """
 <div class="card">
-<h2>Nuova prenotazione</h2>
-<form method="post">
-  <table style="width:auto">
-  <tr><td>Nome</td><td><input name="first_name" value="{{ f.first_name }}"></td>
-      <td>Cognome</td><td><input name="last_name" value="{{ f.last_name }}"></td></tr>
-  <tr><td>Telefono</td><td><input name="phone" value="{{ f.phone }}"></td>
-      <td>Email</td><td><input name="email" value="{{ f.email }}"></td></tr>
-  <tr><td>Check-in</td><td><input type="date" name="checkin" value="{{ f.checkin }}"></td>
-      <td>Notti</td><td><input type="number" name="nights" min="1" value="{{ f.nights }}" style="width:70px"></td></tr>
-  <tr><td>Adulti</td><td><input type="number" name="adults" min="1" value="{{ f.adults }}" style="width:70px"></td>
-      <td>Bambini</td><td><input type="number" name="children" min="0" value="{{ f.children }}" style="width:70px"></td></tr>
-  <tr><td>Soluzione</td><td>
-      <select name="board">
-        {% for code, label in boards %}<option value="{{ code }}" {{ 'selected' if code == f.board }}>{{ label }}</option>{% endfor %}
-      </select></td>
-      <td>Prezzo/notte</td><td>&euro; {{ '%.2f'|format(price) }} <small>(mercato)</small></td></tr>
-  <tr><td>Camera</td><td>
-      <select name="room">
-        {% for n, lab in room_choices %}<option value="{{ n }}" {{ 'selected' if n|string == f.room }}>{{ lab }}</option>{% endfor %}
-      </select></td>
-      <td>Sconto %</td><td><input name="discount" value="{{ f.discount }}" style="width:70px"></td></tr>
-  <tr><td>Colore</td><td>
-      <label><input type="checkbox" name="use_color" {{ 'checked' if f.use_color }}> usa</label>
-      <input type="color" name="color" value="{{ f.color or '#cfe2f3' }}"></td>
-      <td>Commenti</td><td><input name="comments" value="{{ f.comments }}"></td></tr>
-  </table>
-  <p>
-    <button name="action" value="update">Aggiorna camere/prezzo</button>
-    <button name="action" value="save">Salva prenotazione</button>
-    {% if confirm %}<button name="action" value="confirm">Salva comunque</button>{% endif %}
-  </p>
-</form>
-{% if warn %}<p class="msg">{{ warn }}</p>{% endif %}
-{% if book_msg %}<p class="msg">{{ book_msg }}</p>{% endif %}
+<h2>Prenotazione {{ res.code }} &mdash; Camera {{ res.room_number }}</h2>
+<p>Stato: <b>{{ res.status }}</b></p>
+<p>Ospite: {{ name }}{{ ' — ' + res.phone if res.phone }}{{ ' — ' + res.email if res.email }}</p>
+<p>Check-in: <b>{{ ci }}</b> &mdash; Check-out: <b>{{ co }}</b> ({{ nights }} notti)</p>
+<p>Adulti: {{ res.adults }} &mdash; Bambini: {{ res.children }} &mdash; Soluzione: {{ res.board }}</p>
+<p>Prezzo/notte: &euro; {{ '%.2f'|format(res.price_per_night) }}{{ ' — sconto ' + res.discount|string + '%' if res.discount }}
+   &mdash; Totale soggiorno (IVA incl.): &euro; {{ '%.2f'|format(totals.total) }}</p>
+{% if res.comments %}<p>Commenti: {{ res.comments }}</p>{% endif %}
+<a class="btn" href="{{ url_for('web.room_page', number=res.room_number) }}">Scheda camera</a>
+<a class="btn" href="{{ url_for('web.timeline_page') }}">Torna alla timeline</a>
 </div>
 """
 
 
-def _booking_defaults(room=None):
-    today = clock.today()
-    return {"first_name": "", "last_name": "", "phone": "", "email": "",
-            "checkin": today.isoformat(), "nights": "1", "adults": "2",
-            "children": "0", "board": "BB", "room": str(room or ""),
-            "discount": "", "use_color": False, "color": "", "comments": ""}
-
-
-def _booking_dates(f):
-    ci = date.fromisoformat(f["checkin"])
-    return ci, ci + timedelta(days=max(1, int(f["nights"] or 1)))
-
-
-def _render_booking(f, warn=None, msg=None, confirm=False):
-    try:
-        ci, co = _booking_dates(f)
-        free = reservations.available_rooms(ci, co)
-    except (ValueError, TypeError):
-        free = []
-    room_choices = [(r["number"], f"{r['number']}{' (suite)' if r['is_suite'] else ''}")
-                    for r in free]
-    if f["room"] and f["room"] not in {str(n) for n, _ in room_choices}:
-        room_choices.insert(0, (int(f["room"]), f"{f['room']} (attuale)"))
-    price = reservations.price_for(f["board"]) if f["board"] in constants.BOARDS else 0.0
-    return render_page("Nuova prenotazione", "web.dashboard", BOOKING_TPL,
-                       live=False, f=f, boards=BOARD_CHOICES,
-                       room_choices=room_choices, price=price, warn=warn,
-                       book_msg=msg, confirm=confirm)
-
-
-@bp.route("/booking", methods=["GET", "POST"])
-def booking_page():
-    if request.method == "GET":
-        return _render_booking(_booking_defaults(request.args.get("room")))
-    f = {k: request.form.get(k, "").strip() for k in _booking_defaults()}
-    f["use_color"] = request.form.get("use_color") == "on"
-    action = request.form.get("action")
-    if action == "update":
-        return _render_booking(f)
-    try:
-        ci, co = _booking_dates(f)
-        adults, children = int(f["adults"] or 1), int(f["children"] or 0)
-        room_number = int(f["room"])
-        discount = float(f["discount"].replace(",", ".")) if f["discount"] else None
-    except (ValueError, TypeError):
-        return _render_booking(f, msg="Valori non validi (controlla date, numeri, camera).")
-    warn = reservations.capacity_warning(room_number, adults, children)
-    if warn and action != "confirm":
-        return _render_booking(f, warn=warn + " Confermi?", confirm=True)
-    try:
-        reservations.create_reservation(
-            first_name=f["first_name"], last_name=f["last_name"],
-            room_number=room_number, checkin=ci, checkout=co, adults=adults,
-            children=children, price_per_night=reservations.price_for(f["board"]),
-            board=f["board"], discount=discount, phone=f["phone"],
-            email=f["email"], color=(f["color"] if f["use_color"] else ""),
-            comments=f["comments"])
-    except reservations.ValidationError as exc:
-        return _render_booking(f, msg=str(exc))
-    return redirect(url_for("web.dashboard"))
+@bp.route("/reservation/<int:res_id>")
+def reservation_page(res_id):
+    res = reservations.get(res_id)
+    if res is None:
+        return redirect(url_for("web.timeline_page"))
+    ci = date.fromisoformat(res["checkin_date"])
+    co = date.fromisoformat(res["checkout_date"])
+    return render_page(f"Prenotazione {res['code']}", "web.timeline_page",
+                       RESERVATION_TPL, res=res,
+                       name=reservations.guest_display_name(res),
+                       ci=ci.strftime("%d/%m/%Y"), co=co.strftime("%d/%m/%Y"),
+                       nights=(co - ci).days, totals=billing.bill_totals(res))
 
 
 # --- reception: arrivi/partenze/reclami ----------------------------------------
@@ -791,23 +752,41 @@ STAFF_TPL = """
 {% if not receptionists %}<p>Nessun receptionist assunto.</p>{% endif %}
 {% if receptionists %}
 <form method="post" action="{{ url_for('web.staff_shift') }}">
-<table>
-<tr><th>Receptionist</th>{% for d in weekdays %}<th>{{ d }}{{ ' (oggi)' if loop.index0 == today_wd }}</th>{% endfor %}</tr>
+<table id="recTable">
+<tr><th>Receptionist</th>{% for d in weekdays %}<th>{{ d }}{{ ' (oggi)' if loop.index0 == today_wd }}</th>{% endfor %}<th>Ore/limite</th></tr>
 {% for e in receptionists %}
-<tr>
+<tr data-limit="{{ e.limit }}" data-today-hours="{{ e.today_hours }}">
   <td>{{ e.first_name }} {{ e.last_name }} ({{ e.contract_label }}, max {{ e.limit }}h){{ '' if e.permanent else ' - prova' }}</td>
   {% for wd in range(7) %}
   <td>{% if wd == today_wd %}{{ e.week.get(wd|string) or '-' }}
-    {% else %}<select name="shift_{{ e.id }}_{{ wd }}">
+    {% else %}<select data-shiftsel name="shift_{{ e.id }}_{{ wd }}">
       <option value="-">-</option>
       {% for s in e.allowed %}<option value="{{ s }}" {{ 'selected' if e.week.get(wd|string) == s else '' }}>{{ s }}</option>{% endfor %}
     </select>{% endif %}</td>
   {% endfor %}
+  <td class="hrs"></td>
 </tr>
 {% endfor %}
 </table>
 <button>Applica turni</button>
 </form>
+<script>
+(function(){
+  const SHIFT_HOURS = {{ shift_hours_json|safe }};
+  function recalc(tr) {
+    let total = parseInt(tr.dataset.todayHours, 10) || 0;
+    tr.querySelectorAll('select[data-shiftsel]').forEach(s => { total += SHIFT_HOURS[s.value] || 0; });
+    const limit = parseInt(tr.dataset.limit, 10);
+    const cell = tr.querySelector('.hrs');
+    cell.textContent = total + 'h / ' + limit + 'h';
+    cell.classList.toggle('over', total > limit);
+  }
+  document.querySelectorAll('#recTable select[data-shiftsel]').forEach(s => {
+    s.addEventListener('change', () => recalc(s.closest('tr')));
+  });
+  document.querySelectorAll('#recTable tr[data-limit]').forEach(recalc);
+})();
+</script>
 {% endif %}
 {% if staff_msg %}<p class="msg">{{ staff_msg }}</p>{% endif %}
 </div>
@@ -838,19 +817,26 @@ def _staff_page(msg=None):
     candidates = [{**c, "bonus_label": staff.BONUSES[c["bonus"]][0],
                   "bonus_desc": staff.BONUSES[c["bonus"]][1]} for c in staff.candidates()]
     sched = staff.schedule()
-    receptionists = [
-        {**dict(e), "contract_label": staff.CONTRACTS[e["contract"]]["label"],
-         "week": sched.get(str(e["id"]), {}), "limit": staff.week_limit(e),
-         "allowed": staff.allowed_shifts(e["contract"])}
-        for e in staff.receptionists()]
+    today_wd = today.weekday()
+    receptionists = []
+    for e in staff.receptionists():
+        week = sched.get(str(e["id"]), {})
+        today_shift = week.get(str(today_wd))
+        receptionists.append({
+            **dict(e), "contract_label": staff.CONTRACTS[e["contract"]]["label"],
+            "week": week, "limit": staff.week_limit(e),
+            "allowed": staff.allowed_shifts(e["contract"]),
+            "today_hours": staff.shift_hours(today_shift) if today_shift else 0})
+    shift_hours_map = {s: staff.shift_hours(s)
+                       for s in (*staff.SHIFTS_8H, *staff.SHIFTS_4H)}
     return render_page(
-        "Dipendenti", "web.staff_page", STAFF_TPL, employees=employees,
+        "Dipendenti", "web.staff_page", STAFF_TPL, live=False, employees=employees,
         roster_text=roster_text, payday=staff.PAYDAY, unpaid_cost=staff.unpaid_cost(),
         cost_mult=staff.EMPLOYER_COST_MULT,
         roles=[(r, staff.ROLE_LABELS[r]) for r in staff.ROLES],
         roster_next=staff.roster_next(), candidates=candidates,
-        receptionists=receptionists, weekdays=WEEKDAYS, today_wd=today.weekday(),
-        staff_msg=msg)
+        receptionists=receptionists, weekdays=WEEKDAYS, today_wd=today_wd,
+        shift_hours_json=json.dumps(shift_hours_map), staff_msg=msg)
 
 
 @bp.route("/staff")
@@ -1031,18 +1017,32 @@ def reviews_page():
 PROBLEMS_TPL = """
 <div class="card">
 <h2>To Do</h2>
+<p>Riparazioni in corso: <b>{{ active_repairs }}/{{ max_repairs }}</b>
+  {% if active_repairs >= max_repairs %}<span class="msg">— al massimo, aspetta
+  che finisca una riparazione (o potenzia da Ristrutturazioni)</span>{% endif %}</p>
 <table>
 <tr><th>Problema</th><th>Rimedio</th><th>Stato</th><th></th></tr>
 {% for p in items %}
-<tr {{ 'style="color:#888;text-decoration:line-through"' if p.done else '' }}>
-<td>{{ p.desc }}</td><td>{{ p.fix_label }}</td><td>{{ 'Risolto' if p.done else 'APERTO' }}</td>
-<td>{% if not p.done %}
+<tr {{ 'style="color:#888;text-decoration:line-through"' if p.done
+      else ('style="color:#8a6300"' if p.in_progress else '') }}>
+<td>{{ p.desc }}</td><td>{{ p.fix_label }}</td><td>{{ p.status }}</td>
+<td>{% if not p.done and not p.in_progress %}
 <form method="post" action="{{ url_for('web.problems_resolve', problem_id=p.id) }}">
   {% if p.needs_operator %}<select name="operator_id">
     {% for op in cleaners %}<option value="{{ op.id }}">{{ op.first_name }} {{ op.last_name }}</option>{% endfor %}
   </select>{% endif %}
-  <button {{ 'disabled' if p.needs_operator and not cleaners else '' }}>Risolvi</button>
-</form>{% endif %}</td>
+  <button {{ 'disabled' if (p.needs_operator and not cleaners) or p.blocked_by_cap else '' }}
+    title="{{ 'Massimo raggiunto: sistema o potenzia prima di iniziarne un altro' if p.blocked_by_cap else '' }}">Risolvi</button>
+</form>
+{% elif p.in_progress and p.room_number %}
+  {% if p.room_blocked %}
+  <span style="font-size:12px;color:#555">Camera bloccata</span>
+  {% else %}
+  <form method="post" action="{{ url_for('web.problems_block_room', problem_id=p.id) }}">
+    <button>Blocca camera</button>
+  </form>
+  {% endif %}
+{% endif %}</td>
 </tr>
 {% endfor %}
 </table>
@@ -1051,16 +1051,42 @@ PROBLEMS_TPL = """
 """
 
 
+def _fmt_remaining(delta) -> str:
+    total_h = max(0.0, delta.total_seconds() / 3600)
+    if total_h < 1:
+        return "meno di un'ora"
+    days, hours = divmod(int(total_h), 24)
+    if days:
+        return f"{days}g {hours}h" if hours else f"{days}g"
+    return f"{hours}h"
+
+
 def _problems_page(msg=None):
+    now = clock.now()
+    active = problems.active_repairs()
+    max_repairs = problems.max_concurrent_repairs()
+    at_cap = active >= max_repairs
     items = []
     for p in problems.todo_list():
         kind, amount = problems.PROBLEMS[p["key"]]["fix"]
         fix_label = (f"Ripara: € {amount:g}" if kind == "money" else f"Pulizie: {amount:g}h")
+        done = p["resolved_at"] is not None
+        in_progress = (not done) and p["due_at"] is not None
+        if done:
+            status = "Risolto"
+        elif in_progress:
+            remaining = datetime.fromisoformat(p["due_at"]) - now
+            status = "In corso — mancano " + _fmt_remaining(remaining)
+        else:
+            status = "APERTO"
         items.append({**dict(p), "desc": problems.describe(p), "fix_label": fix_label,
-                     "done": p["resolved_at"] is not None, "needs_operator": kind == "cleaning"})
+                     "done": done, "in_progress": in_progress, "status": status,
+                     "needs_operator": kind == "cleaning",
+                     "blocked_by_cap": at_cap and not done and not in_progress})
     cleaners = [e for e in staff.all_employees() if e["role"] == staff.ROLE_CLEANING]
     return render_page("To Do", "web.problems_page", PROBLEMS_TPL,
-                       items=items, cleaners=cleaners, problems_msg=msg)
+                       items=items, cleaners=cleaners, problems_msg=msg,
+                       active_repairs=active, max_repairs=max_repairs)
 
 
 @bp.route("/problems")
@@ -1074,6 +1100,15 @@ def problems_resolve(problem_id):
     try:
         problems.resolve(problem_id, operator_id=operator_id)
     except (problems.ProblemError, estate.EstateError) as exc:
+        return _problems_page(msg=str(exc))
+    return redirect(url_for("web.problems_page"))
+
+
+@bp.route("/problems/<int:problem_id>/block-room", methods=["POST"])
+def problems_block_room(problem_id):
+    try:
+        problems.block_room(problem_id)
+    except problems.ProblemError as exc:
         return _problems_page(msg=str(exc))
     return redirect(url_for("web.problems_page"))
 
@@ -1138,6 +1173,19 @@ DINING_TPL = """
   {% endfor %}
 </div>
 </div>
+
+<div class="card">
+<h3>Ospiti attesi oggi</h3>
+<table>
+<tr><th>Pasto</th><th>Ospiti attesi</th><th>Posti a sedere</th><th>Capienza personale</th><th></th></tr>
+{% for m in meal_rows %}
+<tr {{ 'style="color:#b71c1c;font-weight:700"' if m.over else '' }}>
+<td>{{ m.label }}</td><td>{{ m.expected }}</td><td>{{ m.seats }}</td><td>{{ m.staff_cap }}</td>
+<td>{{ 'AVVISO: capienza insufficiente' if m.over else '' }}</td>
+</tr>
+{% endfor %}
+</table>
+</div>
 <script>
 (function(){
   let dragged = null;
@@ -1196,8 +1244,19 @@ def _dining_page():
                           "bottom": chairs - top,
                           "occupied": len(placed[1]) if placed else 0,
                           "room": placed[1][0]["room_number"] if placed else None})
+    today = clock.today()
+    seats = dining.counts()["sedie"]
+    meal_rows = []
+    for it_key, cap_key in (("colazione", "Colazione"), ("pranzo", "Pranzo"),
+                            ("cena", "Cena")):
+        expected = sum(r[2] for r in meals.meal_rows(it_key, today))
+        staff_cap = staff.dining_capacity(cap_key, today)
+        meal_rows.append({"label": cap_key, "expected": expected, "seats": seats,
+                          "staff_cap": staff_cap,
+                          "over": expected > seats or expected > staff_cap})
     return render_page("Sala pasti", "web.dining_page", DINING_TPL, live=False,
-                       header=header, cells=cells, dining_cols=dining.GRID_COLS)
+                       header=header, cells=cells, dining_cols=dining.GRID_COLS,
+                       meal_rows=meal_rows)
 
 
 @bp.route("/dining")
@@ -1304,7 +1363,17 @@ MAIL_VIEW_TPL = """
 {% if mail_msg %}<p class="msg">{{ mail_msg }}</p>{% endif %}
 {% if mail_ok %}<p style="color:#2e7d32;font-weight:600">{{ mail_ok }}</p>{% endif %}
 </div>
-"""
+""" + ("""
+{% if days %}
+<div class="card">
+<h3>Disponibilita nel periodo richiesto ({{ m.ci }} &rarr; {{ m.co }})</h3>
+<p style="font-size:12px;color:#555">Periodo della richiesta evidenziato in
+  giallo; rosso = hotel al completo quel giorno. Trascina una prenotazione
+  per fare spazio, o clicca per vederne i dettagli.</p>
+""" + TIMELINE_TABLE_TPL + """
+</div>
+{% endif %}
+""")
 
 
 def _mail_view(mail_id, msg=None, ok=None):
@@ -1313,8 +1382,16 @@ def _mail_view(mail_id, msg=None, ok=None):
         return redirect(url_for("web.mail_page"))
     ctx = {**dict(m), "status": mail.status(m),
            "received": m["received_at"][:16].replace("T", " ")}
+    extra = {}
+    if m["kind"] == "request":
+        ci = date.fromisoformat(m["checkin"])
+        co = date.fromisoformat(m["checkout"])
+        days, grid = _timeline_grid(clock.today() - timedelta(days=3), 31,
+                                    highlight_start=ci, highlight_end=co)
+        ctx["ci"], ctx["co"] = ci.strftime("%d/%m"), co.strftime("%d/%m")
+        extra = {"days": days, "grid": grid}
     return render_page(m["subject"], "web.mail_page", MAIL_VIEW_TPL, live=False,
-                       m=ctx, mail_msg=msg, mail_ok=ok)
+                       m=ctx, mail_msg=msg, mail_ok=ok, **extra)
 
 
 @bp.route("/mail/<int:mail_id>")
@@ -1346,12 +1423,36 @@ ALLFOODS_TPL = """
 <div class="card">
 <h2>AllFoods!</h2>
 <p><b>Dispensa: {{ food }} / {{ cap }}</b> &mdash; 1 unita = 1 pasto servito</p>
-<form method="post">
+<form method="post" style="display:inline"><input type="hidden" name="action" value="buy">
   <label>Unita (&euro; {{ '%.0f'|format(unit_cost) }} l'una):
     <input type="number" name="units" min="1" value="10" style="width:70px"></label>
   <button>Compra</button>
 </form>
+<form method="post" style="display:inline"><input type="hidden" name="action" value="fill">
+  <button {{ 'disabled' if food >= cap }}>Riempi scorte
+    (&euro; {{ '%.2f'|format((cap - food) * unit_cost) }})</button>
+</form>
 {% if food_msg %}<p class="msg">{{ food_msg }}</p>{% endif %}
+</div>
+
+<div class="card">
+<h3>Rifornimento automatico settimanale</h3>
+{% if restock %}
+<p>Attivo: ogni <b>{{ weekdays[restock.weekday] }}</b> arrivano
+   <b>{{ restock.units }}</b> unita (se c'e spazio e saldo).</p>
+<form method="post"><input type="hidden" name="action" value="restock_off">
+  <button>Disattiva</button></form>
+{% else %}
+<p>Non attivo.</p>
+{% endif %}
+<form method="post"><input type="hidden" name="action" value="restock_on">
+  <label>Giorno: <select name="weekday">
+    {% for i in range(7) %}<option value="{{ i }}" {{ 'selected' if restock and restock.weekday == i }}>{{ weekdays[i] }}</option>{% endfor %}
+  </select></label>
+  <label>Unita a consegna: <input type="number" name="units" min="1"
+    value="{{ restock.units if restock else 30 }}" style="width:70px"></label>
+  <button>Programma</button>
+</form>
 </div>
 """
 
@@ -1360,12 +1461,24 @@ ALLFOODS_TPL = """
 def allfoods_page():
     msg = None
     if request.method == "POST":
+        action = request.form.get("action", "buy")
         try:
-            estate.buy_food(request.form.get("units", type=int) or 0)
+            if action == "buy":
+                estate.buy_food(request.form.get("units", type=int) or 0)
+            elif action == "fill":
+                space = estate.food_cap() - estate.food()
+                if space > 0:
+                    estate.buy_food(space)
+            elif action == "restock_on":
+                estate.set_restock_schedule(request.form.get("weekday", type=int) or 0,
+                                            request.form.get("units", type=int) or 1)
+            elif action == "restock_off":
+                estate.clear_restock_schedule()
         except estate.EstateError as exc:
             msg = str(exc)
     return render_page("AllFoods!", "web.browser_page", ALLFOODS_TPL, food=estate.food(),
-                       cap=estate.food_cap(), unit_cost=estate.FOOD_UNIT_COST, food_msg=msg)
+                       cap=estate.food_cap(), unit_cost=estate.FOOD_UNIT_COST, food_msg=msg,
+                       restock=estate.restock_schedule(), weekdays=WEEKDAYS)
 
 
 # --- ristrutturazioni ----------------------------------------------------------
@@ -1418,6 +1531,19 @@ ESTATE_TPL = """
   <button {{ 'disabled' if lv.done or not lv.next }}>{{ '✓ ' + lv.label if lv.done else lv.label + ' (x' + lv.mult + ') — € ' + '%.0f'|format(lv.cost) }}</button></form>
 {% endfor %}
 </div>
+<div class="card">
+<h3>Problemi e manutenzione</h3>
+<p>Riparazioni contemporanee: <b>{{ max_repairs }}</b></p>
+<form method="post" style="margin:3px 0"><input type="hidden" name="action" value="repair_slot">
+  <button>Contatti da tuttofare (+1 riparazione contemporanea)
+    &mdash; &euro; {{ '%.2f'|format(repair_slot_cost) }}</button></form>
+<form method="post" style="margin:3px 0"><input type="hidden" name="action" value="toolbox">
+  <button {{ 'disabled' if has_toolbox }}>{{ '✓ Cassetta degli attrezzi (-25% tempo riparazioni)'
+    if has_toolbox else 'Cassetta degli attrezzi (-25% tempo riparazioni) — € ' + '%.0f'|format(toolbox_cost) }}</button></form>
+<form method="post" style="margin:3px 0"><input type="hidden" name="action" value="compliance">
+  <button {{ 'disabled' if compliance_active }}>{{ 'Controllo delle norme attivo fino al ' + compliance_until
+    if compliance_active else 'Controllo delle norme (-50% probabilita problemi, 30 giorni) — € ' + '%.0f'|format(compliance_cost) }}</button></form>
+</div>
 """
 
 _ESTATE_ACTIONS = {
@@ -1429,6 +1555,9 @@ _ESTATE_ACTIONS = {
     "renovate": lambda f: estate.renovate_room(int(f["number"])),
     "amenity": lambda f: amenities.buy(f["key"]),
     "upgrade": lambda f: amenities.buy_room_upgrade(int(f["level"])),
+    "repair_slot": lambda f: problems.buy_repair_slot(),
+    "toolbox": lambda f: problems.buy_toolbox(),
+    "compliance": lambda f: problems.buy_compliance(clock.today()),
 }
 
 
@@ -1438,7 +1567,7 @@ def estate_page():
     if request.method == "POST":
         try:
             _ESTATE_ACTIONS[request.form["action"]](request.form)
-        except (estate.EstateError, ValueError, KeyError) as exc:
+        except (estate.EstateError, problems.ProblemError, ValueError, KeyError) as exc:
             msg = str(exc) or "Selezione non valida."
     floors = [(fl, estate.floor_room_count(fl)) for fl in estate.owned_floors()]
     own, lvl = amenities.owned(), amenities.room_level()
@@ -1458,7 +1587,13 @@ def estate_page():
         table_costs=dining.TABLE_COSTS, chair_cost=dining.CHAIR_COST,
         worn=[r["number"] for r in rooms.worn_rooms()], renovate_cost=estate.RENOVATE_COST,
         tier=amenities.tier(), missing=amenities.missing_for_next(),
-        amenity_rows=amenity_rows, level_rows=level_rows)
+        amenity_rows=amenity_rows, level_rows=level_rows,
+        max_repairs=problems.max_concurrent_repairs(),
+        repair_slot_cost=problems.repair_slot_cost(),
+        has_toolbox=problems.has_toolbox(), toolbox_cost=problems.TOOLBOX_COST,
+        compliance_active=problems.compliance_active(clock.today()),
+        compliance_until=problems.compliance_until(),
+        compliance_cost=problems.COMPLIANCE_COST)
 
 
 # --- impostazioni / debug ------------------------------------------------------
@@ -1643,12 +1778,13 @@ La barra in alto mostra data/ora simulate e il turno. Controlli: Pausa, Play,
 T (tempo reale), 1x/2x/5x. Il tempo avanza lato server anche senza ricaricare.
 
 PRENOTAZIONI
-- Le richieste arrivano per email (tab Mail): Inserisci o Rifiuta. Scadono
-  dopo 48 ore o superata la data di check-in.
-- "Nuova prenotazione" (tab Camere) inserisce a mano; il prezzo per notte e
-  di mercato (listino soluzione x upgrade camere).
-- Nella Timeline sposti una prenotazione non ancora arrivata su un'altra
-  camera, a parita di date.
+- Le richieste arrivano solo per email (tab Mail), entro 14 giorni dalla
+  data odierna: Inserisci o Rifiuta. Scadono dopo 48 ore o superata la data
+  di check-in. Sotto ogni richiesta trovi una mini-timeline con il periodo
+  evidenziato (rosso = hotel al completo quel giorno) per farti spazio.
+- Nella Timeline (barre continue per permanenza) trascini una prenotazione
+  non ancora arrivata su un'altra camera, a parita di date; clicca una
+  prenotazione per vederne i dettagli.
 
 OSPITI E RECEPTION
 - Gli arrivi compaiono in Reception (Pomeriggio/Sera): fai il check-in. Oltre
@@ -1660,7 +1796,9 @@ OSPITI E RECEPTION
 
 PASTI E CIBO
 - I pasti dipendono dalla soluzione. Ogni pasto consuma 1 unita di cibo
-  (Browser > AllFoods!, 10 euro/unita). La sala pasti ha tavoli e sedie.
+  (Browser > AllFoods!, 10 euro/unita, con rifornimento automatico
+  settimanale programmabile). La sala pasti ha tavoli e sedie, con la stima
+  degli ospiti attesi per pasto in fondo alla pagina.
 - Se manca cibo, posto o personale l'ospite si lamenta in Reception (Parla).
 
 DIPENDENTI
@@ -1674,6 +1812,11 @@ ECONOMIA
 CRESCITA
 - Ristrutturazioni: camere, piani, dispensa, tavoli, rinnovi e servizi.
 - Categoria (1-5 stelle) da camere e servizi. Rating (TrustHotel) da 3.
+
+TO DO
+- Risolvere un problema (paga o assegna le pulizie) ne AVVIA la riparazione:
+  si chiude da sola dopo un tempo che dipende dalla gravita (da un'ora fino
+  a un paio di giorni per i guasti piu grossi). Il To Do mostra quanto manca.
 
 IMPOSTAZIONI
 Velocita del tempo, data, generatore prenotazioni, budget manuale, email,

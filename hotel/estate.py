@@ -210,6 +210,37 @@ def buy_food(units: int) -> int:
     return food()
 
 
+def restock_schedule():
+    """{'weekday': 0-6, 'units': int} programmato, oppure None se spento."""
+    return kv_get("food_restock", None)
+
+
+def set_restock_schedule(weekday: int, units: int) -> None:
+    kv_set("food_restock", {"weekday": int(weekday) % 7, "units": max(1, int(units))})
+
+
+def clear_restock_schedule() -> None:
+    kv_set("food_restock", None)
+
+
+def restock_tick(today) -> int:
+    """Nel giorno programmato consegna il rifornimento settimanale (una volta
+    al giorno). Spazio o saldo insufficienti: consegna quel che puo, o niente
+    -- non blocca mai il gioco. Ritorna le unita consegnate."""
+    sched = restock_schedule()
+    if not sched or today.weekday() != sched["weekday"]:
+        return 0
+    if kv_get("food_restock_last") == today.isoformat():
+        return 0
+    kv_set("food_restock_last", today.isoformat())
+    units = min(sched["units"], food_cap() - food())
+    if units <= 0 or budget.totals()["balance"] < FOOD_UNIT_COST * units:
+        return 0
+    _spend(FOOD_UNIT_COST * units, f"Rifornimento automatico AllFoods! x{units}")
+    kv_set("food", food() + units)
+    return units
+
+
 def food_cap_upgrade_cost() -> float:
     return round(FOOD_CAP_UPGRADE_BASE
                  * FOOD_CAP_UPGRADE_MULT ** kv_get("food_cap_upgrades", 0), 2)

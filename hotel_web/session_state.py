@@ -34,7 +34,8 @@ DATA_DIR.mkdir(exist_ok=True)
 # input umani ripetitivi (check-in/out, gestione mail) vengono automatizzati.
 IDLE_SECONDS = 60        # dopo tot secondi senza azioni reali -> idle
 WELCOME_MIN_IDLE = 300   # sotto questa durata di idle niente "Bentornato"
-IDLE_MAIL_FACTOR = 0.7   # 30% di mail in meno in idle
+IDLE_MAIL_FACTOR = 0.7      # 30% di mail in meno in idle
+IDLE_PROBLEM_FACTOR = 0.5   # in idle, meta dei problemi (gia dimezzati di base)
 IDLE_SCALE = 48.0        # "1x": 48 ore di gioco per 1 ora reale
 
 # stato "di fabbrica" dei moduli hotel.*, catturato prima che qualunque
@@ -142,9 +143,10 @@ def tick_session(session_id: str) -> None:
                 reception.auto_desk(now)     # 'autonomo': anche in gioco attivo
                 if idle:
                     _idle_auto_desk(now)     # in idle: un receptionist qualsiasi
-                problems.tick(now)
+                problems.tick(now, factor=IDLE_PROBLEM_FACTOR if idle else 1.0)
                 staff.tick(now)
                 estate.run_utilities(now.date())
+                estate.restock_tick(now.date())
                 taxes.settle(now.date())
                 amenities.accrue_passive(now)
 
@@ -169,6 +171,10 @@ def tick_session(session_id: str) -> None:
 
 
 def _is_idle(st: dict) -> bool:
+    # in pausa esplicita l'utente ha gia detto "non avanzare": mai forzarlo
+    # in idle (niente 1x automatico, niente automazione di check-in/mail).
+    if st["paused"]:
+        return False
     return time.time() - st["last_activity"] > IDLE_SECONDS
 
 

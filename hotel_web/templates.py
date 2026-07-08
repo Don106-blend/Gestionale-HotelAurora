@@ -360,6 +360,9 @@ BASE = """
     background-attachment: fixed; min-height: 100vh; }
   svg.px { vertical-align: -3px; }
 
+  /* --- barra superiore fissa: header + tab restano visibili scorrendo --- */
+  .stickytop { position: sticky; top: 0; z-index: 50; }
+
   /* --- barra del titolo stile Vista --- */
   header.topbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
     padding: 8px 16px; color: #eaf6ff;
@@ -462,27 +465,32 @@ BASE = """
   .dots { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
   .dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid #222; }
 
-  /* --- Timeline: barre continue --- */
+  /* --- Timeline: leggibilita' prima di tutto, niente vetro sopra i dati --- */
+  .card:has(.tl) { background: #ffffff; backdrop-filter: none; }
   .tl { overflow-x: auto; }
-  .tl table { border-collapse: collapse; background: rgba(255,255,255,.95);
-    table-layout: fixed; width: max-content; }
-  .tl td, .tl th { border: 1px solid #e2ecf5; padding: 0; font-size: 11px;
-    text-align: center; width: 34px; height: 24px; }
-  .tl tr:nth-child(even) td { background: transparent; }
-  .tl th.room, .tl td.room { width: 52px; font-weight: 700; text-align: left;
-    padding: 0 4px; position: sticky; left: 0;
-    background: linear-gradient(180deg, #f4fafe, #ddeefb); z-index: 1; }
-  .tl td.today { background: rgba(180,230,140,.35); }
-  .tl th.today { background: linear-gradient(180deg, #e9f9d8, #cdeeb2); }
-  .tl .bar { height: 18px; border-radius: 9px; border: 1px solid #5c7d99;
-    margin: 2px 3px; font-size: 10px; color: #1c3550; overflow: hidden;
-    white-space: nowrap; padding: 0 6px; text-align: left;
-    background-image: linear-gradient(180deg, rgba(255,255,255,.65),
-      rgba(255,255,255,.15) 48%, rgba(0,0,0,.05));
-    box-shadow: inset 0 1px 0 rgba(255,255,255,.8); }
+  .tl table { border-collapse: collapse; background: #ffffff; table-layout: fixed; }
+    /* niente "width" qui: con table-layout:fixed + colgroup, width:auto
+       (il default) fa si che la larghezza della tabella sia ESATTAMENTE la
+       somma delle colonne dichiarate, senza ridistribuire spazio extra in
+       base al contenuto (il bug delle colonne di larghezza diversa). */
+  .tl td, .tl th { border: 1px solid #d5e1ea; padding: 0; font-size: 12px;
+    text-align: center; width: 42px; height: 30px; color: #16324f; }
+  .tl th { font-weight: 700; background: #eef5fb; }
+  .tl tr:nth-child(even) td { background: #f4f9fc; }
+  .tl th.room, .tl td.room { width: 60px; font-weight: 700; text-align: left;
+    padding: 0 6px; position: sticky; left: 0; background: #eef5fb;
+    border-right: 2px solid #7ab0d4; z-index: 1; }
+  .tl tr:nth-child(even) td.room { background: #e3eff8; }
+  .tl td.today { background: #d8edc4; }
+  .tl th.today { background: #bfe4a0; }
+  .tl td.hl, .tl th.hl { box-shadow: inset 0 0 0 2px #f0a500; background: #ffe6a8; }
+  .tl td.hl.full, .tl th.hl.full { box-shadow: inset 0 0 0 2px #c62828; background: #f5b3b3; }
+  .tl .bar { height: 22px; border-radius: 5px; border: 1px solid rgba(0,0,0,.28);
+    margin: 3px 4px; font-size: 12px; font-weight: 600; color: #16233a;
+    overflow: hidden; white-space: nowrap; padding: 0 7px; text-align: left; }
   .tl .bar.movable { cursor: grab; }
   .tl .bar.movable:active { cursor: grabbing; }
-  .tl tr.drop td { background: #dbeafe; }
+  .tl tr.drop td { background: #cfe8ff; }
 
   /* --- Bentornato Direttore --- */
   .welcome-banner { position: relative; max-width: 1200px; margin: 12px auto 0;
@@ -529,9 +537,14 @@ BASE = """
     background: linear-gradient(160deg, rgba(255,255,255,.92), rgba(214,236,250,.8));
     box-shadow: inset 0 1px 0 #fff, 0 2px 6px rgba(23,86,138,.2); }
   .apps a:hover { box-shadow: inset 0 1px 0 #fff, 0 0 12px rgba(110,195,255,.9); }
+
+  /* --- turni receptionist: avviso ore in tempo reale --- */
+  .hrs { font-weight: 600; white-space: nowrap; }
+  .hrs.over { color: #b71c1c; }
 </style>
 </head>
 <body>
+<div class="stickytop">
 <header class="topbar">
   <b>{{ hotel_name }}</b>
   <span>{{ now_str }}</span>
@@ -554,6 +567,7 @@ BASE = """
   <a href="{{ url_for(endpoint) }}" class="{{ 'active' if endpoint == active else '' }}">{{ icon(ic, 15) }}{{ label }}</a>
   {% endfor %}
 </nav>
+</div>
 {% if welcome %}
 <div class="welcome-banner" id="welcomeBanner">
   <button class="wb-x" onclick="document.getElementById('welcomeBanner').remove()">&times;</button>
