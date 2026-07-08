@@ -159,7 +159,7 @@ def speed():
 
 DASHBOARD_TPL = """
 <div class="card" style="display:flex;justify-content:space-between;align-items:center">
-  <a class="btn" href="{{ url_for('web.booking_page') }}">+ Nuova prenotazione</a>
+  <a class="btn" href="{{ url_for('web.booking_page') }}">{{ icon('plus', 14) }} Nuova prenotazione</a>
   <span style="font-size:12px;color:#555">Clicca una camera per la scheda.
     Striscia gialla = check-out oggi | quadrato fucsia = arrivo oggi |
     quadrato blu = arrivo domani | linea grigia = sporca | rossa = bloccata |
@@ -169,7 +169,7 @@ DASHBOARD_TPL = """
 <h3>Piano {{ floor }}</h3>
 <div class="grid">
   {% for r in floor_rooms %}
-  <a class="room" style="background: {{ r.fill }}" href="{{ url_for('web.room_page', number=r.number) }}">
+  <a class="room" style="background-color: {{ r.fill }}" href="{{ url_for('web.room_page', number=r.number) }}">
     <span class="num">{{ r.number }}{{ ' S' if r.is_suite else '' }}</span>
     {% if r.guest %}<div>{{ r.guest[:16] }}</div>{% endif %}
     {% if r.checkout_today %}<span class="m-checkout"></span>{% endif %}
@@ -319,7 +319,7 @@ OCCUPANCY_TPL = """
     blu = tutti assenti, grigia = libera. Clicca per le info.</div>
   <div class="grid">
     {% for r in rooms %}
-    <a class="room" style="background: {{ r.fill }}"
+    <a class="room" style="background-color: {{ r.fill }}"
        href="{{ url_for('web.room_guests', number=r.number) }}">
       <span class="num">{{ r.number }}{{ ' S' if r.is_suite else '' }}</span>
       <div class="dots">
@@ -366,15 +366,24 @@ TIMELINE_TPL = """
   check-in non si trascinano.</p>
 <div class="tl">
 <table>
+<colgroup>
+  <col style="width:52px">
+  {% for d in days %}<col style="width:34px">{% endfor %}
+</colgroup>
 <tr><th class="room">Cam.</th>{% for d in days %}<th class="{{ 'today' if d.today }}">{{ d.label }}</th>{% endfor %}</tr>
 {% for row in grid %}
 <tr data-room="{{ row.number }}">
   <td class="room">{{ row.number }}</td>
   {% for c in row.cells %}
-  <td class="{{ 'today' if c.today }}">
-    {% if c.res %}<div class="bar{{ ' movable' if c.movable }}" style="background:{{ c.color }}"
-      title="{{ c.name }}"{% if c.movable %} draggable="true" data-res="{{ c.res_id }}"{% endif %}>{{ c.name if c.first else '' }}</div>{% endif %}
+  {% if c.span %}
+  <td colspan="{{ c.span }}">
+    <div class="bar{{ ' movable' if c.movable }}" style="background-color:{{ c.color }}"
+      title="{{ c.name }} ({{ c.ci }} → {{ c.co }})"
+      {% if c.movable %} draggable="true" data-res="{{ c.res_id }}"{% endif %}>{{ c.name }}</div>
   </td>
+  {% else %}
+  <td class="{{ 'today' if c.today }}"></td>
+  {% endif %}
   {% endfor %}
 </tr>
 {% endfor %}
@@ -437,16 +446,28 @@ def _timeline_page():
     grid = []
     for r in rooms.all_rooms():
         cells = []
-        for d in span:
-            res = cover.get((r["number"], d))
+        i = 0
+        while i < n_days:
+            res = cover.get((r["number"], span[i]))
+            if res is None:
+                cells.append({"span": 0, "today": span[i] == today})
+                i += 1
+                continue
+            # barra continua: un solo td con colspan per tutta la permanenza
+            length = 1
+            while (i + length < n_days
+                   and (nxt := cover.get((r["number"], span[i + length]))) is not None
+                   and nxt["id"] == res["id"]):
+                length += 1
             cells.append({
-                "today": d == today,
-                "res": res is not None,
-                "res_id": res["id"] if res else None,
-                "movable": bool(res) and res["status"] == "booked",
-                "first": bool(res) and date.fromisoformat(res["checkin_date"]) == d,
-                "name": reservations.guest_display_name(res) if res else "",
-                "color": (res["color"] or TL_STATUS_COLOR.get(res["status"], "#ccc")) if res else ""})
+                "span": length,
+                "res_id": res["id"],
+                "movable": res["status"] == "booked",
+                "name": reservations.guest_display_name(res),
+                "ci": date.fromisoformat(res["checkin_date"]).strftime("%d/%m"),
+                "co": date.fromisoformat(res["checkout_date"]).strftime("%d/%m"),
+                "color": res["color"] or TL_STATUS_COLOR.get(res["status"], "#ccc")})
+            i += length
         grid.append({"number": r["number"], "cells": cells})
     return render_page("Timeline", "web.timeline_page", TIMELINE_TPL,
                        live=False, days=days, grid=grid)
@@ -1201,13 +1222,13 @@ BROWSER_TPL = """
 <div class="card">
 <h2>Browser</h2>
 <div class="apps">
-  <a href="{{ url_for('web.mail_page') }}">&#9993; Mail</a>
-  <a href="{{ url_for('web.estate_page') }}">&#127959; Ristrutturazioni</a>
-  <a href="{{ url_for('web.allfoods_page') }}">&#129386; AllFoods!</a>
-  <a href="{{ url_for('web.reviews_page') }}">&#11088; TrustHotel</a>
-  <a href="{{ url_for('web.staff_page') }}">&#128188; JobHotel</a>
-  <a href="{{ url_for('web.bank_page') }}">&#127974; Banca di Aurora</a>
-  <a href="{{ url_for('web.help_page') }}">&#128218; Istruzioni</a>
+  <a href="{{ url_for('web.mail_page') }}">{{ icon('mail', 34) }}Mail</a>
+  <a href="{{ url_for('web.estate_page') }}">{{ icon('hammer', 34) }}Ristrutturazioni</a>
+  <a href="{{ url_for('web.allfoods_page') }}">{{ icon('apple', 34) }}AllFoods!</a>
+  <a href="{{ url_for('web.reviews_page') }}">{{ icon('star', 34) }}TrustHotel</a>
+  <a href="{{ url_for('web.staff_page') }}">{{ icon('case', 34) }}JobHotel</a>
+  <a href="{{ url_for('web.bank_page') }}">{{ icon('bank', 34) }}Banca di Aurora</a>
+  <a href="{{ url_for('web.help_page') }}">{{ icon('book', 34) }}Istruzioni</a>
 </div>
 </div>
 <div class="card">
