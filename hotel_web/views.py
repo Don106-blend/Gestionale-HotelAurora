@@ -4,7 +4,6 @@ view: quella gira nel game loop di session_state, questa e solo lettura +
 azioni dirette dell'utente (check-in, prenota, sposta, risolvi, ...)."""
 
 import json
-import uuid
 from datetime import date, datetime, timedelta
 
 from flask import (Blueprint, g, redirect, request, send_file, session,
@@ -16,27 +15,32 @@ from hotel import (amenities, bank, billing, budget, cleaning, clock,
                     rooms, staff, taxes)
 from hotel.database import kv_get, kv_set
 
-from . import session_state, templates
+from . import accounts, session_state, templates
 
 bp = Blueprint("web", __name__)
 
 WEEKDAYS = ("Lun", "Mar", "Mer", "Gio", "Ven", "Sab", "Dom")
 _SETUP_ENDPOINTS = {"web.setup", "web.setup_receptionist"}
+# login/registrazione/logout non montano nessuna partita: prima del login
+# non esiste ancora un account a cui agganciare un file .db di gioco.
+_NO_MOUNT_ENDPOINTS = {"web.login", "web.register", "web.logout"}
 
 
 # --- montaggio della sessione di gioco su ogni richiesta --------------------
 
 @bp.before_request
 def _mount():
-    sid = session.get("sid")
-    if not sid:
-        sid = uuid.uuid4().hex
-        session["sid"] = sid
-        session.permanent = True
-    cm = session_state.use(sid)
+    if request.endpoint in _NO_MOUNT_ENDPOINTS:
+        return None
+    user_id = session.get("user_id")
+    if not user_id:
+        return redirect(url_for("web.login"))
+    # l'id dell'account e' anche l'id della partita: stabile, cosi lo stesso
+    # utente ritrova sempre il suo hotel da qualunque browser faccia login.
+    cm = session_state.use(user_id)
     cm.__enter__()
     g._cm = cm
-    session_state.on_request(sid, request.headers.get("X-Poll") == "1")
+    session_state.on_request(user_id, request.headers.get("X-Poll") == "1")
     if request.endpoint in _SETUP_ENDPOINTS:
         return None
     if not estate.is_setup_done():
@@ -70,13 +74,94 @@ def common_ctx() -> dict:
                      if ready else 0),
         # il "Bentornato" si consuma solo su una richiesta reale (non i poll)
         "welcome": (None if request.headers.get("X-Poll") == "1"
-                    else session_state.take_welcome(session.get("sid"))),
+                    else session_state.take_welcome(session.get("user_id"))),
     }
 
 
 def render_page(title, active, body_tpl, *, live=True, **extra) -> str:
     return templates.page(title, active, body_tpl, {**common_ctx(), **extra},
                           live=live)
+
+
+# --- login / registrazione ------------------------------------------------------
+
+LOGIN_TPL = """
+<h2>Accedi</h2>
+{% if login_msg %}<p class="msg">{{ login_msg }}</p>{% endif %}
+<form method="post">
+  <label>Nome utente <input name="username" value="{{ username or '' }}" required autofocus></label>
+  <label>Password <input type="password" name="password" required></label>
+  <button>Accedi</button>
+</form>
+<p class="alt">Non hai un account? <a href="{{ url_for('web.register') }}">Registrati</a></p>
+"""
+
+REGISTER_TPL = """
+<h2>Registrati</h2>
+{% if register_msg %}<p class="msg">{{ register_msg }}</p>{% endif %}
+<form method="post">
+  <label>Nome utente (almeno {{ min_username }} caratteri)
+    <input name="username" value="{{ username or '' }}" required autofocus></label>
+  <label>Password (almeno {{ min_password }} caratteri) <input type="password" name="password" required></label>
+  <label>Ripeti password <input type="password" name="password2" required></label>
+  <button>Crea account</button>
+</form>
+<p class="alt">Hai gia' un account? <a href="{{ url_for('web.login') }}">Accedi</a></p>
+"""
+
+
+def _login_user(user) -> None:
+    session.clear()
+    session["user_id"] = user["id"]
+    session["username"] = user["username"]
+    session.permanent = True
+
+
+@bp.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user_id"):
+        return redirect(url_for("web.dashboard"))
+    msg = None
+    username = ""
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        user = accounts.verify(username, request.form.get("password", ""))
+        if user is None:
+            msg = "Nome utente o password errati."
+        else:
+            _login_user(user)
+            return redirect(url_for("web.dashboard"))
+    return templates.auth_page("Accedi", LOGIN_TPL, login_msg=msg, username=username)
+
+
+@bp.route("/register", methods=["GET", "POST"])
+def register():
+    if session.get("user_id"):
+        return redirect(url_for("web.dashboard"))
+    msg = None
+    username = ""
+    if request.method == "POST":
+        username = request.form.get("username", "")
+        password = request.form.get("password", "")
+        if password != request.form.get("password2", ""):
+            msg = "Le due password non coincidono."
+        else:
+            try:
+                user = accounts.register(username, password)
+            except accounts.AccountError as exc:
+                msg = str(exc)
+            else:
+                _login_user(user)
+                return redirect(url_for("web.dashboard"))
+    return templates.auth_page(
+        "Registrati", REGISTER_TPL, register_msg=msg, username=username,
+        min_username=accounts.MIN_USERNAME, min_password=accounts.MIN_PASSWORD)
+
+
+@bp.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("web.login"))
 
 
 # --- primo avvio -------------------------------------------------------------
@@ -1654,9 +1739,8 @@ DEBUG_TPL = """
 
 <h3>Salvataggio</h3>
 <a class="btn" href="{{ url_for('web.debug_export') }}">Esporta salvataggio (.db)</a>
-
-<h3>Sistema</h3>
-<form method="post" onsubmit="return confirm('Cancellare TUTTO e tornare al primo avvio?')"><input type="hidden" name="action" value="resetall"><button>Reset totale</button></form>
+<p style="font-size:12px;color:#555">Il reset totale della partita si trova ora
+  nel <a href="{{ url_for('web.profile_page') }}">Profilo</a>.</p>
 </div>
 """
 
@@ -1713,9 +1797,6 @@ def debug_action():
         elif action == "budget":
             budget.record(f.get("kind", "income"), f.get("category", "").strip() or "Voce",
                           float(f.get("amount", 0).replace(",", ".")), f.get("note", "").strip())
-        elif action == "resetall":
-            estate.reset_all()
-            return redirect(url_for("web.setup"))
     except (ValueError, KeyError, estate.EstateError):
         pass   # ponytail: azioni di debug, errore silenzioso (nessun flash store)
     return redirect(url_for("web.debug_page"))
@@ -1751,8 +1832,67 @@ def guests_meta():
 
 @bp.route("/debug/export")
 def debug_export():
-    path = session_state.DATA_DIR / f"{session['sid']}.db"
+    path = session_state.DATA_DIR / f"{session['user_id']}.db"
     return send_file(path, as_attachment=True, download_name="hotelaurora_salvataggio.db")
+
+
+# --- profilo ---------------------------------------------------------------------
+
+PROFILE_TPL = """
+<div class="card">
+<h2>Profilo</h2>
+<p>Utente: <b>{{ username }}</b> &mdash; account creato il {{ created_at }}</p>
+<form method="post" action="{{ url_for('web.logout') }}"><button>Esci</button></form>
+</div>
+
+<div class="card">
+<h3>Dati partita</h3>
+<table>
+<tr><td>Hotel</td><td>{{ game.hotel_name }}</td></tr>
+<tr><td>Direttore</td><td>{{ game.director }}</td></tr>
+<tr><td>Categoria</td><td>{{ '★' * game.tier }}{{ '☆' * (5 - game.tier) }}</td></tr>
+<tr><td>Saldo</td><td>&euro; {{ '%.2f'|format(game.balance) }}</td></tr>
+<tr><td>Camere</td><td>{{ game.room_count }}</td></tr>
+<tr><td>Dipendenti</td><td>{{ game.staff_count }}</td></tr>
+<tr><td>Stanze vendute (totale)</td><td>{{ game.rooms_sold }}</td></tr>
+<tr><td>Data di gioco attuale</td><td>{{ game.game_date }}</td></tr>
+</table>
+</div>
+
+<div class="card">
+<h3>Ricomincia</h3>
+<p style="font-size:12px;color:#555">Cancella tutti i dati di QUESTA partita
+  (camere, prenotazioni, dipendenti, budget, potenziamenti...) e torna al
+  primo avvio. Non tocca gli altri account.</p>
+<form method="post" action="{{ url_for('web.profile_reset') }}"
+  onsubmit="return confirm('Cancellare TUTTI i dati della partita di {{ username }} e ricominciare?')">
+  <button>Reset totale</button>
+</form>
+</div>
+"""
+
+
+@bp.route("/profile")
+def profile_page():
+    user = accounts.get(session["user_id"])
+    game = {
+        "hotel_name": estate.hotel_name(), "director": estate.user_name(),
+        "tier": amenities.tier(), "balance": budget.totals()["balance"],
+        "room_count": len(rooms.all_rooms()), "staff_count": len(staff.all_employees()),
+        "rooms_sold": budget.rooms_sold(),
+        "game_date": clock.now().strftime("%d/%m/%Y %H:%M"),
+    }
+    return render_page("Profilo", "web.profile_page", PROFILE_TPL,
+                       username=user["username"], created_at=user["created_at"][:10],
+                       game=game)
+
+
+@bp.route("/profile/reset", methods=["POST"])
+def profile_reset():
+    # opera sul .db montato per QUESTO account (session_state.use lo ha gia
+    # puntato su sessions_data/<user_id>.db): non tocca altri profili.
+    estate.reset_all()
+    return redirect(url_for("web.setup"))
 
 
 # --- istruzioni ----------------------------------------------------------------
@@ -1820,7 +1960,11 @@ TO DO
 
 IMPOSTAZIONI
 Velocita del tempo, data, generatore prenotazioni, budget manuale, email,
-cibo, metadati ospiti, esporta salvataggio e Reset totale.
+cibo, metadati ospiti ed esporta salvataggio.
+
+PROFILO
+Dati dell'account e della partita corrente; da li anche il Reset totale
+(cancella solo i dati di QUESTO profilo) e il logout.
 """
 
 

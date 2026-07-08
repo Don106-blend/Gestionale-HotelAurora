@@ -38,3 +38,10 @@ def totals() -> dict:
     income = by.get(INCOME, 0.0)
     loss = by.get(LOSS, 0.0)
     return {"income": income, "loss": loss, "balance": round(income - loss, 2)}
+
+
+def rooms_sold() -> int:
+    """Stanze vendute finora: un check-out incassato ciascuna (categoria
+    'Soggiorno' a bilancio), anche quelli a importo 0 (usciti d'ufficio)."""
+    return get_conn().execute(
+        "SELECT COUNT(*) FROM ledger WHERE category = 'Soggiorno'").fetchone()[0]

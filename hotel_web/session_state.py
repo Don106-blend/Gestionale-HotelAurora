@@ -179,10 +179,7 @@ def _is_idle(st: dict) -> bool:
 
 
 def _rooms_sold() -> int:
-    """Stanze vendute finora = movimenti 'Soggiorno' a bilancio (un check-out
-    incassato ciascuno, anche quelli a importo 0)."""
-    return database.get_conn().execute(
-        "SELECT COUNT(*) FROM ledger WHERE category = 'Soggiorno'").fetchone()[0]
+    return budget.rooms_sold()
 
 
 def _snapshot() -> dict:

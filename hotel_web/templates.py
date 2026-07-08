@@ -301,6 +301,20 @@ ICONS = {
         "............",
         "............",
     ),
+    "badge": (
+        "............",
+        "...kkkkkk...",
+        "..kffffffk..",
+        "..kffffffk..",
+        "..kffffffk..",
+        "...kkkkkk...",
+        "..k......k..",
+        ".kkbbbbbbkk.",
+        ".kbbbbbbbbk.",
+        ".kbbb..bbbk.",
+        ".kkk....kkk.",
+        "............",
+    ),
 }
 
 
@@ -339,6 +353,7 @@ NAV = (
     ("web.reports_page", "Fogli", "sheet"),
     ("web.browser_page", "Browser", "globe"),
     ("web.debug_page", "Impostazioni", "gear"),
+    ("web.profile_page", "Profilo", "badge"),
 )
 
 BASE = """
@@ -620,3 +635,55 @@ def page(title: str, active: str, body_tpl: str, ctx: dict, live: bool = True) -
     return render_template_string(
         BASE, title=title, active=active, nav=NAV, content=Markup(inner),
         live=live, **ctx)
+
+
+# --- login / registrazione: nessuna partita montata, quindi guscio a parte
+# (niente header/orologio/nav: prima del login non c'e' nessun hotel.*
+# montato da mostrare, e templates.page() ne ha bisogno per common_ctx()) --
+
+AUTH_BASE = """
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }} - HotelAurora</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center;
+    justify-content: center; padding: 16px; color: #1c3550;
+    font-family: "Segoe UI", Tahoma, Verdana, sans-serif;
+    background:
+      radial-gradient(circle at 85% 10%, rgba(255,255,255,.6), transparent 42%),
+      radial-gradient(circle at 10% 90%, rgba(120,220,160,.28), transparent 45%),
+      radial-gradient(circle at 70% 80%, rgba(90,190,255,.22), transparent 40%),
+      linear-gradient(180deg, #a6d8f7, #dbeffb 45%, #cfeadd); }
+  .card { background: rgba(255,255,255,.92); border: 1px solid rgba(122,176,212,.65);
+    border-radius: 10px; padding: 26px 28px; box-shadow: 0 4px 18px rgba(23,86,138,.25);
+    width: 320px; }
+  h2 { color: #17568a; margin-top: 0; }
+  label { display: block; margin-bottom: 12px; font-size: 14px; }
+  input { width: 100%; margin-top: 4px; padding: 7px 8px; border: 1px solid #7ab0d4;
+    border-radius: 4px; background: linear-gradient(180deg, #ffffff, #f2f9ff);
+    font-family: inherit; font-size: 14px; }
+  input:focus { outline: none; border-color: #4aa3e8; box-shadow: 0 0 6px rgba(110,195,255,.8); }
+  button { width: 100%; margin-top: 8px; padding: 9px; border: 1px solid #7ab0d4; border-radius: 5px;
+    background: linear-gradient(180deg, #fdfeff, #e6f2fb 45%, #cfe6f8 52%, #e9f6ff);
+    font-weight: 700; font-size: 14px; cursor: pointer; color: #1c3550; }
+  button:hover { border-color: #4aa3e8; box-shadow: 0 0 7px rgba(110,195,255,.85); }
+  .msg { color: #b71c1c; font-weight: 600; font-size: 13px; margin: 0 0 10px; }
+  p.alt { text-align: center; font-size: 13px; }
+  p.alt a { color: #17568a; }
+</style>
+</head>
+<body>
+<main class="card">{{ content }}</main>
+</body>
+</html>
+"""
+
+
+def auth_page(title: str, body_tpl: str, **ctx) -> str:
+    """Guscio minimale per /login e /register: nessun hotel.* montato."""
+    inner = render_template_string(body_tpl, **ctx)
+    return render_template_string(AUTH_BASE, title=title, content=Markup(inner))

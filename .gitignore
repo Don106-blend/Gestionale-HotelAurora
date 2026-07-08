@@ -1,1 +1,4 @@
-sessions_data/
+sessions_data/*
+!sessions_data/.gitignore
+accounts.db
+secret_key.txt

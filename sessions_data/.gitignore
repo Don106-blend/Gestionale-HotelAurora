@@ -1,0 +1,4 @@
+# salvataggi di gioco (uno per account, vedi hotel_web/session_state.py):
+# dati generati a runtime, mai da versionare.
+*
+!.gitignore
